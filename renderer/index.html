@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: file:; media-src 'self' file:; style-src 'self' 'unsafe-inline';" />
+  <title>Clip Merger</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Shared stroke icon set — every button uses these so all glyphs share one weight/baseline. -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></symbol>
+    <symbol id="i-chev-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-chev-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+    <symbol id="i-view-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M10 5v14M14 5v14"/></symbol>
+    <symbol id="i-split" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/></symbol>
+    <symbol id="i-delete" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></symbol>
+    <symbol id="i-marker" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></symbol>
+    <symbol id="i-detach" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></symbol>
+    <symbol id="i-merge" viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></symbol>
+    <symbol id="i-skip-start" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8z"/><path d="M5 19V5"/></symbol>
+    <symbol id="i-step-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+    <symbol id="i-step-fwd" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+    <symbol id="i-skip-end" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8z"/><path d="M19 5v14"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5l4.5 2.5-4.5 2.5z"/></symbol>
+    <symbol id="i-transition" viewBox="0 0 24 24"><circle cx="9.5" cy="12" r="5.5"/><circle cx="14.5" cy="12" r="5.5"/></symbol>
+    <symbol id="i-ellipsis" viewBox="0 0 24 24">
+      <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    </symbol>
+  </svg>
+
+  <header id="toolbar">
+    <div class="brand">
+      <span class="logo">▚</span>
+      <span>Clip&nbsp;Merger</span>
+    </div>
+    <div class="tools">
+      <div class="btn-group" role="group" aria-label="Project">
+        <button id="btn-new" class="btn ghost">New</button>
+        <button id="btn-open" class="btn ghost">Open</button>
+        <button id="btn-save" class="btn ghost">Save</button>
+      </div>
+      <div class="seg" id="layout-toggle" role="group" aria-label="Layout">
+        <button class="seg-btn" data-layout="portrait" title="Bins across the top">Portrait</button>
+        <button class="seg-btn" data-layout="landscape" title="Bins on the sides">Landscape</button>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="export-group">
+      <div class="btn-group" role="group" aria-label="App">
+        <button id="btn-settings" class="btn ghost">Settings</button>
+        <button id="btn-help" class="btn ghost" title="Help & shortcuts">Help</button>
+      </div>
+      <button id="btn-export-cancel" class="btn danger" hidden title="Stop the current export">Cancel</button>
+      <button id="btn-export" class="btn accent">Export</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- BINS: Media on one side, Transitions + Sounds on the other (see layouts) -->
+    <section id="bins-left">
+      <section class="bin" data-bin="media">
+        <header class="bin-head">
+          <button class="bin-toggle" title="Collapse" aria-label="Collapse bin"><svg class="icon" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
+          <span class="bin-title">Media</span>
+          <span class="bin-sub" data-role="sub">clips</span>
+          <span class="spacer"></span>
+          <button class="btn ghost icon bin-dir" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></button>
+          <button class="btn ghost icon bin-add" title="Add to timeline" aria-label="Add to timeline"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
+          <button class="btn ghost icon bin-refresh" title="Refresh" aria-label="Refresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+          <button id="btn-purge-media" class="btn ghost icon bin-purge" title="Move media used by any project into the output folder's Purged folder (the saves are updated to match)" aria-label="Purge media used by projects"><svg class="icon" aria-hidden="true"><use href="#i-delete"/></svg></button>
+        </header>
+        <div class="bin-crumbs hidden" data-role="crumbs"></div>
+        <div class="bin-body" data-role="list"></div>
+      </section>
+    </section>
+
+    <section id="bins-right">
+      <section class="bin" data-bin="transitions">
+        <header class="bin-head">
+          <button class="bin-toggle" title="Collapse" aria-label="Collapse bin"><svg class="icon" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
+          <span class="bin-title">Transitions</span>
+          <span class="bin-sub" data-role="sub"></span>
+          <span class="spacer"></span>
+          <button class="btn ghost icon bin-dir" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></button>
+          <button class="btn ghost icon bin-add" title="Add to timeline" aria-label="Add to timeline"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
+          <button class="btn ghost icon bin-refresh" title="Refresh" aria-label="Refresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+        </header>
+        <div class="bin-crumbs hidden" data-role="crumbs"></div>
+        <div class="bin-body" data-role="list"></div>
+      </section>
+
+      <section class="bin" data-bin="sounds">
+        <header class="bin-head">
+          <button class="bin-toggle" title="Collapse" aria-label="Collapse bin"><svg class="icon" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
+          <span class="bin-title">Sounds</span>
+          <span class="bin-sub" data-role="sub"></span>
+          <span class="spacer"></span>
+          <button class="btn ghost icon bin-dir" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></button>
+          <button class="btn ghost icon bin-add" title="Add to timeline" aria-label="Add to timeline"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
+          <button class="btn ghost icon bin-refresh" title="Refresh" aria-label="Refresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+        </header>
+        <div class="bin-crumbs hidden" data-role="crumbs"></div>
+        <div class="bin-body" data-role="list"></div>
+      </section>
+
+      <section class="bin" data-bin="effects" id="bin-effects">
+        <header class="bin-head">
+          <button class="bin-toggle" title="Collapse" aria-label="Collapse bin"><svg class="icon" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
+          <span class="bin-title">Effects</span>
+          <span class="bin-sub">camera</span>
+          <span class="spacer"></span>
+        </header>
+        <div class="bin-body" id="effects-list" data-role="list"></div>
+      </section>
+    </section>
+
+    <!-- CENTER: viewer — program output, or a single bin clip with its own transport -->
+    <section id="viewer" class="mode-program">
+      <div id="viewer-media" class="viewer-pane">
+        <video id="preview-media" controls playsinline></video>
+        <div id="preview-watermark" class="watermark hidden">
+          <span class="watermark-tag">PREVIEW</span>
+        </div>
+        <div id="media-empty" class="preview-empty">Click a Media clip in the bin to preview it here</div>
+      </div>
+      <div id="viewer-program" class="viewer-pane">
+        <div class="preview-stage">
+          <video id="preview-bg" muted playsinline></video>
+          <video id="preview-b" playsinline></video>
+          <video id="preview" playsinline></video>
+          <div id="zoom-cross" class="zoom-cross hidden" aria-hidden="true"></div>
+          <div id="zoom-hud" class="zoom-hud hidden" aria-hidden="true"></div>
+        </div>
+        <div id="preview-empty" class="preview-empty">Timeline empty — drag clips from the bins</div>
+      </div>
+      <button id="viewer-split" class="btn ghost icon" title="Toggle single / side-by-side viewer" aria-label="Toggle single / side-by-side viewer"><svg class="icon" aria-hidden="true"><use href="#i-view-split"/></svg></button>
+    </section>
+
+    <!-- BOTTOM: timeline — fixed height, stacked under the viewer; both the MAIN and SOUND lanes always fit (no resizing) -->
+    <section id="timeline-panel">
+      <div id="tl-toolbar">
+        <div class="tl-globals">
+          <div class="tl-group" data-tools="basic">
+            <button id="btn-play" class="btn accent icon" title="Play / pause" aria-label="Play"><svg class="icon" aria-hidden="true"><use id="use-play" href="#i-play"/></svg></button>
+            <button id="btn-split" class="btn" title="Split clip at the marker (playhead)"><svg class="icon" aria-hidden="true"><use href="#i-split"/></svg>Split</button>
+            <button id="btn-del" class="btn danger" title="Remove selected"><svg class="icon" aria-hidden="true"><use href="#i-delete"/></svg>Delete</button>
+            <button id="btn-mark" class="btn" title="Add a marker at the marker position"><svg class="icon" aria-hidden="true"><use href="#i-marker"/></svg>Marker</button>
+          </div>
+          <div class="tl-group" data-tools="clip">
+            <button id="btn-detach" class="btn" disabled title="Detach the selected clip's audio onto the SOUND lane"><svg class="icon" aria-hidden="true"><use href="#i-detach"/></svg>Detach audio</button>
+            <label class="tl-slow" title="Playback speed of the selected clip (0.25× slow … 4× speed up)">
+              <span>Speed</span>
+              <select id="btn-speed" disabled>
+                <option value="0.25">0.25×</option>
+                <option value="0.5">0.5×</option>
+                <option value="0.75">0.75×</option>
+                <option value="1">1×</option>
+                <option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option>
+                <option value="2">2×</option>
+                <option value="4">4×</option>
+              </select>
+            </label>
+            <label class="tl-fit" title="How the selected clip(s) fit the export frame (e.g. 1080×1920 TikTok)">
+              <span id="framing-label">Frame</span>
+              <select id="btn-framing" disabled>
+                <option value="">—</option>
+                <option value="cover">Fill &amp; crop</option>
+                <option value="blur">Whole frame + blur bg</option>
+              </select>
+            </label>
+          </div>
+          <div class="tl-group" data-tools="audio">
+            <label class="tl-vol" title="Volume of the selected clip(s)/sound(s) in dB (-60…+12)">
+              <span id="vol-label">Vol</span>
+              <span id="vol-min">-60</span>
+              <input id="vol-range" type="range" min="-60" max="12" step="0.5" disabled />
+              <span id="vol-max">+12</span>
+              <span id="vol-value">0 dB</span>
+            </label>
+          </div>
+          <div class="tl-group" data-tools="fx">
+            <div class="fx-sub" data-fx="zoom">
+              <label class="tl-zoom" title="Which camera-effect pose the preview scroll/drag edits">
+                <span>FX</span>
+                <select id="btn-eff-pose" disabled>
+                  <option value="to">End pose</option>
+                  <option value="from">Start pose</option>
+                </select>
+              </label>
+              <button id="btn-zoom-ease" class="btn ghost" disabled title="Effect easing: Smooth (eased) or Linear">Smooth</button>
+              <button id="btn-zoom-bg" class="btn ghost" disabled title="Background shown when the pose is below 100%">Black BG</button>
+            </div>
+            <div class="fx-sub" data-fx="shake">
+              <label class="tl-shake" title="Shake intensity (% of the frame)">
+                <span>Intensity</span>
+                <input id="shake-amp" type="range" min="1" max="15" step="0.5" value="4" disabled />
+                <input id="shake-amp-num" type="number" min="1" max="15" step="0.5" value="4" disabled />
+                <span>%</span>
+              </label>
+            </div>
+          </div>
+          <div class="tl-group" data-tools="view">
+            <button id="btn-fx-toggle" class="btn ghost" title="Show/hide the effect bands (hide them to click the clips behind)">Hide FX</button>
+            <label class="check inline" title="Snap to timeline start, markers, playhead and clip/sound edges">
+              <input id="btn-snap" type="checkbox" checked />
+              <span>Snap</span>
+            </label>
+            <button id="btn-fit" class="btn" title="Fit the timeline to the window — 5s pad each side (F)">Fit</button>
+          </div>
+          <span class="spacer"></span>
+          <span id="ad-nav-hint" class="ad-nav-hint hidden" title="What A/D will jump to for the selected item"></span>
+          <span id="tl-time" class="tl-time muted">0.000 / 0.000</span>
+        </div>
+      </div>
+      <div id="tl-scroll">
+        <div id="tl-inner">
+          <div id="tl-ruler"></div>
+          <div id="tl-preroll" aria-hidden="true"></div>
+          <div id="tl-band-warn" class="tl-band warn" aria-hidden="true"></div>
+          <div id="tl-band-danger" class="tl-band danger" aria-hidden="true"></div>
+          <div id="sel-box" aria-hidden="true"></div>
+          <div id="tl-track-video" class="tl-track">
+            <div class="tl-track-label">
+              <button id="btn-close-gaps" class="track-btn" title="Remove all gaps — snap every cut to the left" aria-label="Remove all gaps"><svg class="icon" aria-hidden="true"><use href="#i-merge"/></svg></button>
+              <span>MAIN</span>
+            </div>
+            <div class="tl-track-body" id="tl-video-body"></div>
+          </div>
+          <div id="tl-track-hybrid" class="tl-track">
+            <div class="tl-track-label">
+              <button id="btn-close-gaps2" class="track-btn" title="Remove all gaps in ALT" aria-label="Remove all gaps in ALT"><svg class="icon" aria-hidden="true"><use href="#i-merge"/></svg></button>
+              <span>ALT</span>
+            </div>
+            <div class="tl-track-body" id="tl-hybrid-body"></div>
+          </div>
+          <div id="tl-track-audio" class="tl-track">
+            <div class="tl-track-label">SOUND</div>
+            <div class="tl-track-body" id="tl-audio-body"></div>
+          </div>
+          <div id="tl-zero" aria-hidden="true"></div>
+          <div id="tl-playhead"><div class="ph-handle"></div></div>
+          <div id="drop-marker" class="drop-marker hidden"></div>
+          <div id="drop-proxy" class="drop-proxy hidden"></div>
+          <div id="drag-chip" class="drag-chip hidden"></div>
+          <div id="snap-guide" class="snap-guide hidden"></div>
+        </div>
+      </div>
+      <div id="tl-scrub" role="slider" tabindex="0"
+           title="Grab &amp; drag: the timeline slides under the marker (preview shows that frame) — or click a spot on the video lanes to jump there"
+           aria-label="Timeline shuttle — drag to slide the timeline beneath the pinned marker with live preview">
+        <div class="scrub-nav scrub-nav-l">
+          <button id="btn-scrub-start" class="scrub-btn" title="Jump to the start (00:00.000)" aria-label="Jump to the start"><svg class="icon" aria-hidden="true"><use href="#i-skip-start"/></svg></button>
+          <button id="btn-scrub-prev" class="scrub-btn" title="Back to the previous cut (←)" aria-label="Back to the previous cut"><svg class="icon" aria-hidden="true"><use href="#i-step-back"/></svg></button>
+        </div>
+        <div class="pad-tex" aria-hidden="true"></div>
+        <div class="scrub-nav scrub-nav-r">
+          <button id="btn-scrub-next" class="scrub-btn" title="Forward to the next cut (→)" aria-label="Forward to the next cut"><svg class="icon" aria-hidden="true"><use href="#i-step-fwd"/></svg></button>
+          <button id="btn-scrub-end" class="scrub-btn" title="Jump to the end" aria-label="Jump to the end"><svg class="icon" aria-hidden="true"><use href="#i-skip-end"/></svg></button>
+        </div>
+      </div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="statusbar">
+    <div id="status-msg">Ready</div>
+    <div class="progress-wrap">
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+      <div id="progress-eta" class="muted"></div>
+    </div>
+    <button id="btn-history" class="btn ghost icon" title="Undo history" aria-label="Undo history"><svg class="icon" aria-hidden="true"><use href="#i-step-back"/></svg></button>
+    <div id="encoder-label" class="muted"></div>
+  </footer>
+
+  <div id="sound-audio-rack" hidden aria-hidden="true"></div>
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Settings</h2>
+      <label class="field">
+        <span>ffmpeg path</span>
+        <input id="set-ffmpeg" type="text" />
+      </label>
+      <label class="field">
+        <span>ffprobe path</span>
+        <input id="set-ffprobe" type="text" />
+      </label>
+      <label class="field">
+        <span>Output folder</span>
+        <div class="row">
+          <input id="set-outdir" type="text" />
+          <button id="set-outdir-pick" class="btn ghost icon" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-ellipsis"/></svg></button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Media (clip base) folder</span>
+        <div class="row">
+          <input id="set-basedir" type="text" />
+          <button id="set-basedir-pick" class="btn ghost icon" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-ellipsis"/></svg></button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Transitions folder</span>
+        <div class="row">
+          <input id="set-transdir" type="text" />
+          <button id="set-transdir-pick" class="btn ghost icon" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-ellipsis"/></svg></button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Sounds folder</span>
+        <div class="row">
+          <input id="set-soundsdir" type="text" />
+          <button id="set-soundsdir-pick" class="btn ghost icon" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-ellipsis"/></svg></button>
+        </div>
+      </label>
+      <div class="grid3">
+        <label class="field"><span>Width</span><input id="set-w" type="number" min="2" /></label>
+        <label class="field"><span>Height</span><input id="set-h" type="number" min="2" /></label>
+        <label class="field"><span>FPS</span><input id="set-fps" type="number" min="1" /></label>
+      </div>
+      <label class="field">
+        <span>Encoder</span>
+        <select id="set-encoder"></select>
+      </label>
+      <label class="check">
+        <input id="set-normalize" type="checkbox" />
+        <span>Normalize audio (loudnorm −14 LUFS)</span>
+      </label>
+      <label class="check">
+        <input id="set-autosave" type="checkbox" />
+        <span>Auto-save project</span>
+      </label>
+      <label class="field">
+        <span>Auto-save every <span id="set-autosave-val">5 min</span></span>
+        <input id="set-autosave-min" type="range" min="1" max="30" step="1" value="5" disabled />
+      </label>
+      <div class="modal-actions">
+        <button id="set-close" class="btn accent">Save &amp; Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="help-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Help &amp; shortcuts</h2>
+      <div class="help-body">
+        <p><b>Add media</b> — click a bin tile to preview it, <b>double-click</b> to append to the timeline, or <b>drag</b> it onto a lane to place it. Drag a Media/Transitions tile onto the <b>MAIN</b> lane (or the <b>ALT</b> lane for an alternate run); drag a Sound onto the <b>SOUND</b> lane.</p>
+        <p><b>Edit cuts</b> — click to select (Ctrl/Cmd+click for many) • drag to move (drag left of <b>0:00</b> into the pre-roll) • drag the edges to trim (snap to keyframes keeps cuts lossless) • click a gap then <b>Del</b> to close it • the MAIN-label button removes all gaps.</p>
+        <p><b>Cut tools</b> — with clip(s) selected set <b>Frame</b> (Fill &amp; crop / Whole frame + blur bg), <b>Vol</b> (dB) and <b>Speed</b> in the timeline toolbar. The tiny top strip on a cut shows what was changed.</p>
+        <table class="help-keys">
+          <tr><td><b>S</b></td><td>split at the marker</td></tr>
+          <tr><td><b>Del</b></td><td>delete selection</td></tr>
+          <tr><td><b>← / →</b></td><td>jump to previous / next cut</td></tr>
+          <tr><td><b>A / D</b></td><td>jump to previous / next cut</td></tr>
+          <tr><td><b>F</b></td><td>fit the timeline to the window</td></tr>
+          <tr><td><b>Space</b></td><td>play / pause</td></tr>
+          <tr><td><b>Ctrl+Z / Ctrl+Shift+Z</b></td><td>undo / redo (or the History button)</td></tr>
+          <tr><td><b>◆ Marker</b></td><td>leave a marker at the playhead</td></tr>
+          <tr><td><b>Esc</b></td><td>deselect / close preview</td></tr>
+          <tr><td><b>Ctrl + wheel</b></td><td>zoom the timeline</td></tr>
+          <tr><td><b>Middle-drag</b></td><td>pan the timeline</td></tr>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <button id="help-close" class="btn accent">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="history-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>History</h2>
+      <div class="history-body">
+        <div id="history-list" class="history-list"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="history-close" class="btn accent">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="purge-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Purge used media</h2>
+      <div class="purge-body">
+        <p id="purge-summary" class="muted"></p>
+        <div id="purge-list" class="purge-list"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="purge-cancel" class="btn ghost">Cancel</button>
+        <button id="purge-confirm" class="btn accent">Move &amp; repoint</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirm-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Unsaved changes</h2>
+      <p class="muted">Save changes to your project before continuing?</p>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="btn ghost">Cancel</button>
+        <button id="confirm-discard" class="btn danger">Don't Save</button>
+        <button id="confirm-save" class="btn accent">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="timeline-ops.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

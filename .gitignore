@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+
+# media folders (keep your project stored locally, not in git)
+clips/
+output/
+sounds/
+transitions/
+_snap_.mp4
+
+# app scratch/log files
+_smoke_*.log
+_diag.log
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# local launchers (may contain machine-specific paths)
+*.bat
+
+# local backups + test artifacts
+.backup/
+test-results/

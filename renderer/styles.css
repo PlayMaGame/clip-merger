@@ -1,0 +1,847 @@
+:root {
+  --bg: #14161a;
+  --bg2: #191c22;
+  --bg3: #1f232b;
+  --line: #2a2f3a;
+  --line2: #343b48;
+  --text: #d7dbe2;
+  --muted: #8b93a1;
+  --accent: #2fb8a6;
+  --accent2: #37d0bc;
+  --blue: #4a9eff;
+  --danger: #e5534b;
+  --warn: #e0a94a;
+  --green: #22c55e;
+  --radius: 6px;
+
+  /* shared button tokens — one "constructor" for every control */
+  --btn-h-lg: 30px;
+  --btn-h-md: 26px;
+  --btn-h-sm: 22px;
+  --btn-h-xs: 18px;
+  --tl-row: 42px;
+  --btn-font: 12.5px;
+  --btn-icon: 15px;
+  --btn-bg: var(--bg3);
+  --btn-hover: #262b34;
+  --btn-hover-line: #414a59;
+  --btn-focus: 0 0 0 2px rgba(74, 158, 255, .35);
+}
+
+* { box-sizing: border-box; }
+.hidden, [hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+body { display: flex; flex-direction: column; }
+
+/* ---------- toolbar ---------- */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line);
+  height: 52px;
+  flex: 0 0 auto;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .3px; }
+.logo { color: var(--accent); font-size: 20px; }
+.tools { display: flex; align-items: center; gap: 8px; }
+.spacer { flex: 1; }
+.sep { width: 1px; height: 22px; background: var(--line2); margin: 0 4px; }
+
+/* Bordered group of buttons (header: New/Open/Save, Settings/Help). */
+.btn-group { display: inline-flex; align-items: center; border: 1px solid var(--line2); border-radius: var(--radius); overflow: hidden; }
+.btn-group > .btn { border: 0; border-radius: 0; }
+.btn-group > .btn + .btn { border-left: 1px solid var(--line2); }
+
+/* Shared button base: a flex-centered, fixed-height bordered chip. Every
+   control (seg, toggle, track, scrub, crumb, etc.) reuses this look. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--btn-h-lg);
+  padding: 0 14px;
+  background: var(--btn-bg);
+  color: var(--text);
+  border: 1px solid var(--line2);
+  border-radius: var(--radius);
+  font-size: var(--btn-font);
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.btn:hover { background: var(--btn-hover); border-color: var(--btn-hover-line); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: none; box-shadow: var(--btn-focus); }
+.btn.accent { background: var(--accent); border-color: var(--accent); color: #07201d; font-weight: 600; }
+.btn.accent:hover { background: var(--accent2); }
+.btn.ghost { background: transparent; }
+.btn.ghost:hover { background: var(--btn-hover); }
+.btn.danger:hover { background: rgba(229, 83, 75, .12); border-color: var(--danger); color: var(--danger); }
+.btn.on { background: var(--accent); border-color: var(--accent); color: #07201d; }
+/* Play: accent-filled so it stands out, but same size as the other toolbar buttons. */
+#btn-play { width: 77px; min-width: 77px; height: 30px; background: var(--accent); border-color: var(--accent); color: #07201d; }
+#btn-play:hover { background: var(--accent2); }
+#btn-play .icon { width: 18px; height: 18px; }
+.btn.icon { height: var(--btn-h-sm); min-width: var(--btn-h-sm); padding: 0; }
+.btn.wide { min-width: 84px; }
+.btn:disabled { opacity: .45; cursor: default; }
+
+/* Stroke icons inside buttons — all SVG, share the currentColor stroke. */
+.icon {
+  width: var(--btn-icon);
+  height: var(--btn-icon);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: 0 0 auto;
+}
+button > .icon, .bin-toggle > .icon { pointer-events: none; }
+
+.export-group { display: flex; align-items: center; gap: 6px; }
+
+/* layout toggle (Portrait / Landscape) */
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: var(--radius); overflow: hidden; }
+.seg-btn {
+  background: transparent; color: var(--muted); border: 0;
+  height: var(--btn-h-lg); padding: 0 13px;
+  font-size: var(--btn-font); font-family: inherit; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--line2); }
+.seg-btn:hover { background: var(--btn-hover); color: var(--text); }
+.seg-btn:active { transform: translateY(1px); }
+.seg-btn:focus-visible { outline: none; box-shadow: var(--btn-focus); }
+.seg-btn.on { background: var(--accent); color: #07201d; font-weight: 600; }
+
+/* ---------- main grid: PORTRAIT (default) + LANDSCAPE ---------- */
+#main {
+  position: relative;
+  flex: 1;
+  display: grid;
+  overflow: hidden;
+  min-height: 0;
+  /* Portrait: bins across the top — Media 1/3, Transitions + Sounds 2/3.
+     Rows are fixed: bins / viewer / timeline simply stack and never overlap. */
+  grid-template-columns: 1fr 2fr;
+  grid-template-rows: 180px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "bins-left  bins-right"
+    "viewer     viewer"
+    "timeline   timeline";
+}
+/* Landscape: Media left, viewer centre, Transitions + Sounds right (fixed widths). */
+#main.layout-landscape {
+  grid-template-columns: 260px minmax(0, 1fr) 260px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "bins-left  viewer  bins-right"
+    "timeline   timeline timeline";
+}
+#bins-left, #bins-right { display: flex; flex-direction: row; background: var(--bg); overflow: hidden; min-width: 0; min-height: 0; border-bottom: 1px solid var(--line); }
+#bins-left { grid-area: bins-left; border-right: 1px solid var(--line); }
+#bins-right { grid-area: bins-right; }
+/* separator between Transitions and Sounds (portrait: vertical) */
+#bins-right .bin + .bin { border-left: 1px solid var(--line); }
+#main.layout-landscape #bins-left,
+#main.layout-landscape #bins-right { flex-direction: column; border-bottom: 0; }
+#main.layout-landscape #bins-right { border-left: 1px solid var(--line); }
+#main.layout-landscape #bins-right .bin + .bin { border-left: 0; border-top: 1px solid var(--line); }
+
+/* Horizontal resize handles between bins (widths only, squeeze neighbours). */
+#bin-splitters { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.bin-splitter { position: absolute; width: 6px; pointer-events: auto; cursor: ew-resize; }
+.bin-splitter::after {
+  content: ''; position: absolute; left: 2px; top: 0; bottom: 0; width: 2px; border-radius: 1px;
+  background: transparent; transition: background .12s;
+}
+.bin-splitter:hover::after, .bin-splitter.dragging::after { background: var(--accent); opacity: .75; }
+
+#viewer { grid-area: viewer; position: relative; background: #0c0d10; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; }
+.viewer-pane { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; }
+#viewer.mode-program #viewer-media { display: none; }
+#viewer.mode-media #viewer-program { display: none; }
+#viewer.split #viewer-media { border-right: 1px solid var(--line); }
+#timeline-panel { grid-area: timeline; display: flex; flex-direction: column; background: var(--bg); border-top: 1px solid var(--line); overflow: hidden; min-height: 0; }
+
+/* ---------- bins ---------- */
+.bin { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 0; }
+.bin.collapsed { flex: 0 0 auto; }
+.bin-head {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 8px; background: var(--bg2); border-bottom: 1px solid var(--line); flex: 0 0 auto;
+}
+.bin-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--btn-h-sm);
+  width: var(--btn-h-sm);
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.bin-toggle:hover { background: var(--btn-hover); border-color: var(--line2); color: var(--text); }
+.bin-toggle:active { transform: translateY(1px); }
+.bin-toggle:focus-visible { outline: none; box-shadow: var(--btn-focus); }
+.bin.collapsed .bin-toggle .icon { transform: rotate(-90deg); }
+.bin-toggle .icon { transition: transform .15s; }
+.bin-title { font-weight: 700; font-size: 11.5px; letter-spacing: .4px; text-transform: uppercase; }
+.bin-sub { font-size: 10.5px; color: var(--muted); }
+.bin-body {
+  flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 6px;
+  align-content: start;
+}
+/* Thin, dark scrollbar (matches the timeline/shutter) instead of the OS default. */
+.bin-body { scrollbar-width: thin; scrollbar-color: #3a4150 #101216; }
+.bin-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.bin-body::-webkit-scrollbar-track { background: #101216; }
+.bin-body::-webkit-scrollbar-thumb { background: #333a47; border-radius: 8px; border: 2px solid #101216; }
+.bin-body::-webkit-scrollbar-thumb:hover { background: #454e5e; }
+.bin-body::-webkit-scrollbar-corner { background: #101216; }
+.bin.collapsed .bin-body { display: none; }
+.bin-empty { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding: 14px 8px; text-align: center; }
+
+/* bin breadcrumb + subfolder rows (folder-scoped, lazy-scanned) */
+.bin-crumbs {
+  display: flex; align-items: center; gap: 1px; flex: 0 0 auto;
+  padding: 3px 6px; background: var(--bg); border-bottom: 1px solid var(--line);
+  font-size: 11px; overflow-x: auto; white-space: nowrap;
+  scrollbar-width: thin; scrollbar-color: #3a4150 #101216;
+}
+.bin-crumbs::-webkit-scrollbar { height: 6px; }
+.bin-crumbs::-webkit-scrollbar-thumb { background: #333a47; border-radius: 8px; }
+.bin-crumbs .crumb, .bin-crumbs .crumb-up {
+  background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  font: inherit; padding: 2px 6px; height: var(--btn-h-sm);
+  border-radius: var(--radius);
+  transition: background .12s, color .12s;
+}
+.bin-crumbs .crumb { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bin-crumbs .crumb-up { display: inline-flex; align-items: center; gap: 3px; }
+.bin-crumbs .crumb:hover, .bin-crumbs .crumb-up:hover { background: var(--btn-hover); color: var(--text); }
+.bin-crumbs .crumb:active, .bin-crumbs .crumb-up:active { transform: translateY(1px); }
+.bin-crumbs .crumb:focus-visible, .bin-crumbs .crumb-up:focus-visible { outline: none; box-shadow: var(--btn-focus); }
+.bin-crumbs .crumb.current { color: var(--text); font-weight: 600; }
+.bin-crumbs .crumb-up:disabled { opacity: .3; cursor: default; }
+.bin-crumbs .crumb-sep { color: var(--line2); }
+.bin-folder {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 6px;
+  padding: 4px 7px; background: var(--bg2); border: 1px solid var(--line);
+  border-radius: var(--radius); cursor: pointer; font-size: 11.5px; min-width: 0;
+}
+.bin-folder:hover { border-color: var(--line2); background: var(--bg3); }
+.bin-folder .folder-ico { flex: 0 0 auto; }
+.bin-folder .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.base-item {
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px;
+  padding: 4px; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius);
+  cursor: grab; text-align: center; min-width: 0;
+}
+.base-item:hover { border-color: var(--line2); }
+.base-item.selected { border-color: var(--blue); box-shadow: inset 0 -3px 0 var(--blue); }
+.base-item .thumb { width: 100%; height: 48px; flex: 0 0 auto; background: var(--bg3); border-radius: 3px; object-fit: cover; display: block; -webkit-user-drag: none; }
+.base-item .thumb.placeholder { background: repeating-linear-gradient(45deg, var(--bg3), var(--bg3) 4px, var(--bg) 4px, var(--bg) 8px); }
+.bthumb { position: relative; min-width: 0; }
+.bstars {
+  position: absolute; top: 2px; left: 2px; z-index: 2; pointer-events: none;
+  font-size: 20px; line-height: 1; letter-spacing: 0; white-space: nowrap;
+  color: #ffc94d; text-shadow: 0 0 3px rgba(0, 0, 0, .9), 0 1px 2px rgba(0, 0, 0, .8);
+}
+.base-item.sound { flex-direction: row; align-items: center; text-align: left; gap: 7px; padding: 6px 8px; }
+.base-item.sound .sound-ico { flex: 0 0 auto; color: var(--accent); font-size: 14px; line-height: 1; }
+.base-item.sound .bmeta { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.base-item.sound .bname { flex: 1 1 auto; }
+.base-item.sound .bdur { flex: 0 0 auto; }
+/* Sounds are a compact list, not a thumbnail grid. */
+.bin[data-bin="sounds"] .bin-body { grid-template-columns: 1fr; }
+.base-item .bmeta { min-width: 0; }
+.base-item .bname { font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.base-item .bdur { font-size: 9.5px; color: var(--muted); }
+
+/* ---------- viewer ---------- */
+/* Both elements stay in the render tree so the standby keeps a decoded frame
+   (display:none would suspend it and re-introduce a stall at joins). */
+/* Program preview runs inside a 9:16 stage that mirrors the 1080×1920 export
+   frame, so Fill & crop visibly fills the portrait frame and whole-frame modes
+   letterbox inside it. Standby and backdrop videos share the same box. */
+.preview-stage {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  height: 100%;
+  max-width: 100%;
+  aspect-ratio: 9 / 16;
+  background: #000;
+  overflow: hidden;
+}
+#preview, #preview-b, #preview-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+#preview-bg { object-fit: cover; filter: blur(24px) saturate(1.1); transform: scale(1.06); visibility: hidden; z-index: 0; }
+#viewer-program.bg-on #preview-bg { visibility: visible; }
+/* With a blurred backdrop, let it show through the foreground's letterbox/zoom
+   padding instead of the foreground's own black fill. */
+#viewer-program.bg-on #preview { background: transparent; }
+#preview-b { visibility: hidden; z-index: 1; }
+#preview { visibility: visible; z-index: 2; }
+#preview-media { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; background: #000; }
+.preview-empty {
+  position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); background: #0c0d10; pointer-events: none;
+}
+#viewer-split { position: absolute; top: 6px; right: 8px; z-index: 12; }
+#viewer-split.on { background: var(--accent); border-color: var(--accent); color: #07201d; }
+.watermark { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.watermark-tag {
+  position: absolute; top: 10px; left: 12px;
+  font-weight: 800; letter-spacing: 3px; font-size: 15px; color: #4bea86;
+  background: rgba(0,0,0,.55); border: 1px solid rgba(75,234,134,.6);
+  border-radius: 5px; padding: 3px 9px;
+  text-shadow: 0 0 10px rgba(75,234,134,.45);
+  box-shadow: 0 0 12px rgba(75,234,134,.25);
+}
+/* live tile preview over a bin thumbnail */
+.bin-preview-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; border-radius: 3px; z-index: 3; -webkit-user-drag: none; }
+
+/* ---------- timeline ---------- */
+#tl-toolbar { display: flex; flex-direction: column; padding: 3px 10px; background: var(--bg2); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.tl-globals { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 3px; align-content: flex-start; }
+/* Context groups: dividers are group borders so hiding a group hides its divider too. */
+.tl-group { display: flex; align-items: center; gap: 6px; }
+.tl-group + .tl-group { border-left: 1px solid var(--line2); padding-left: 8px; }
+.check.inline { display: flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+.tl-slow { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.tl-slow span { font-size: 12px; }
+.tl-slow select { padding: 2px 4px; font-size: 12px; background: var(--bg3); color: var(--text); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.tl-slow select:disabled { opacity: .45; cursor: default; }
+.tl-fit { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.tl-fit span { font-size: 12px; }
+.tl-fit select { padding: 2px 4px; font-size: 12px; background: var(--bg3); color: var(--text); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.tl-fit select:disabled { opacity: .45; cursor: default; }
+.tl-vol { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+.tl-vol input[type="range"] { width: 120px; accent-color: var(--accent); cursor: pointer; }
+.tl-vol input[type="range"]:disabled { opacity: .45; cursor: default; }
+.tl-vol #vol-value { min-width: 42px; font-variant-numeric: tabular-nums; color: var(--text); }
+.tl-vol #vol-min, .tl-vol #vol-max { font-size: 10px; }
+.tl-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tl-time.warn { color: var(--warn); }
+.tl-time.danger { color: var(--danger); }
+
+#tl-scroll { flex: 0 0 auto; overflow-x: auto; overflow-y: hidden; position: relative; min-height: 0; scrollbar-width: none; }
+#tl-scroll::-webkit-scrollbar { display: none; }
+/* Fills #tl-scroll exactly, then lays the lanes out as a flexible column so
+   both the Clips and Sounds tracks always share the available height and can
+   never be clipped off the bottom or overlap each other. */
+#tl-inner { position: relative; height: auto; min-width: 100%; display: flex; flex-direction: column; }
+
+#tl-ruler {
+  position: sticky; top: 0; height: 26px; flex: 0 0 26px;
+  background: var(--bg2); border-bottom: 1px solid var(--line);
+  z-index: 8; cursor: pointer;
+}
+.ruler-tick { position: absolute; bottom: 0; font-size: 10px; color: var(--muted); padding-left: 3px; }
+.ruler-tick::after { content: ''; position: absolute; left: 0; bottom: 0; width: 1px; height: 6px; background: var(--line2); }
+.ruler-tick.zero { color: var(--text); font-weight: 600; }
+
+/* Fixed pre-roll runway left of 0:00 (editing-only) + the 0:00 boundary line. */
+#tl-preroll {
+  position: absolute; top: 0; bottom: 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.02) 0 8px, rgba(255,255,255,.05) 8px 16px);
+}
+#tl-preroll::after {
+  content: 'PRE-ROLL'; position: absolute; left: 7px; top: 30px;
+  font-size: 9px; letter-spacing: 1.5px; color: var(--muted); opacity: .55;
+}
+#tl-zero { position: absolute; top: 0; bottom: 0; width: 0; z-index: 19; pointer-events: none; }
+#tl-zero::before { content: ''; position: absolute; left: -0.5px; top: 0; bottom: 0; width: 1px; background: rgba(120,180,255,.6); }
+
+/* Distance bands: pale tints past 1:00 (amber) and 2:00 (red). Used both inside
+   #tl-ruler (strip, behind ticks) and as lane overlays (before the tracks so
+   clips paint above). No z-index: DOM order keeps later siblings on top. */
+.tl-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.tl-band.warn { background: rgba(224, 169, 74, .09); }
+.tl-band.danger { background: rgba(229, 83, 75, .11); }
+
+/* Markers live on the ruler itself (no dedicated strip): a small flag + a rule
+   that spans the ruler height. */
+.marker {
+  position: absolute; top: 0; bottom: 0; width: 0; cursor: grab; z-index: 9;
+}
+.marker::before {
+  content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 2px;
+  background: var(--warn); opacity: .9;
+}
+.marker::after {
+  content: '▼'; position: absolute; left: -6px; top: -1px; font-size: 9px; color: var(--warn); line-height: 10px;
+}
+.marker.selected { z-index: 10; }
+.marker.selected::before { background: var(--accent2); }
+.marker.selected::after { color: var(--accent2); }
+
+.tl-track { position: relative; flex: 0 0 var(--tl-row); min-height: var(--tl-row); border-bottom: 1px solid var(--line); }
+.tl-track-label {
+  position: sticky; left: 0; height: 100%; width: 56px;
+  display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 4px;
+  font-size: 9px; color: var(--muted); letter-spacing: .5px;
+  background: var(--bg2); border-right: 1px solid var(--line); z-index: 28; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden;
+}
+.tl-track-body { position: absolute; left: 56px; right: 0; top: 0; bottom: 0; cursor: pointer; }
+#tl-track-audio { flex: 0 0 var(--tl-row); min-height: var(--tl-row); }
+/* Lane the pointer is hovering while dragging an item across tracks. */
+.tl-track.drop-target { box-shadow: inset 0 0 0 2px rgba(74,158,255,.65); }
+.tl-track.drop-target .tl-track-label { color: var(--accent2); }
+/* Pending paste: drop the item under the pointer. */
+#timeline-panel.pasting, #timeline-panel.pasting #tl-scroll, #timeline-panel.pasting .tl-track-body { cursor: copy; }
+
+/* Small action button living inside the frozen lane label gutter. */
+.track-btn {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--muted);
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  transition: background .12s, border-color .12s, color .12s;
+}
+.track-btn:hover { background: var(--btn-hover); border-color: var(--accent); color: var(--accent); }
+.track-btn:active { transform: translateY(1px); }
+.track-btn:focus-visible { outline: none; box-shadow: var(--btn-focus); }
+.track-btn .icon { width: 9px; height: 9px; }
+
+.tclip {
+  position: absolute; top: 4px; bottom: 4px;
+  background: linear-gradient(180deg, #24464a, #1d3a3d);
+  border: 1px solid #3c6b6b; border-radius: 5px; overflow: hidden;
+  cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+.tclip:hover { box-shadow: 0 0 0 2px rgba(74,158,255,.45); }
+.tclip.selected { box-shadow: 0 0 0 2px var(--blue); z-index: 3; }
+.tclip.dragging { opacity: .8; z-index: 5; }
+.tclip.overlap, .tsb.overlap { border-color: var(--danger) !important; box-shadow: 0 0 0 2px var(--danger), 0 1px 3px rgba(0,0,0,.4); z-index: 6; }
+/* Video/transition clips use the same bottom-anchored label as sounds: it rides
+   on top of a full-bleed waveform, with a dark outline so it stays readable. */
+.tclip .label, .tsb .label {
+  position: absolute; left: 8px; right: 8px; bottom: 2px; z-index: 2;
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; white-space: nowrap; overflow: hidden; pointer-events: none;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.tclip .label { color: #d7f2ef; }
+.tclip .label .dur { color: #8fc9c5; margin-left: 2px; font-size: 9.5px; flex: 0 0 auto; }
+.tclip .label .icn, .tsb .label .icn { flex: 0 0 auto; display: inline-flex; align-items: center; }
+.tclip .label .icn { color: #8fe0d5; }
+.tclip .label .icn .icon { width: 11px; height: 11px; }
+.tclip .badges { position: absolute; right: 14px; top: 2px; display: flex; gap: 3px; pointer-events: none; font-size: 10px; }
+.tclip .mute-badge { position: absolute; left: 4px; top: 2px; color: var(--danger); font-size: 10px; pointer-events: none; }
+/* Title Bar: the top quarter of every item is darkened like a shadow and holds
+   the title (name) plus the morphing tags (speed, dB, frame). It is purely
+   visual — the whole item is draggable — and sits above the waveform. */
+.titlebar {
+  position: absolute; left: 0; right: 0; top: 0; height: 35%; z-index: 3;
+  display: flex; align-items: center; gap: 6px; padding: 0 5px;
+  background: linear-gradient(180deg, rgba(0,0,0,.6) 0%, rgba(0,0,0,.4) 75%, rgba(0,0,0,0) 100%);
+  font-size: 9px; line-height: 1; white-space: nowrap; overflow: hidden;
+  color: #eaf2f8; text-shadow: 0 1px 2px #000; cursor: inherit;
+  pointer-events: none; user-select: none;
+}
+.titlebar .ttl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.titlebar .tmeta { flex: 0 0 auto; color: #ffdf9e; opacity: .95; }
+.tclip.transition .titlebar .tmeta { color: #a9c8ff; }
+.tsb .titlebar .tmeta { color: #d6b0ec; }
+/* Trim handles start below the title band so the full-width top strip stays a
+   reliable grab zone on very narrow items. */
+.tclip .edge { position: absolute; top: 35%; bottom: 0; width: 10px; cursor: ew-resize; z-index: 2; }
+.tclip .edge.l { left: 0; }
+.tclip .edge.r { right: 0; }
+.tclip .edge:hover { background: rgba(47,184,166,.25); }
+.tclip .edge::after { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.25); }
+.tclip .key { position: absolute; bottom: 0; width: 1px; height: 6px; background: rgba(255,255,255,.35); pointer-events: none; z-index: 2; }
+
+/* Items pulled from the Transitions bin: distinct blue skin so they read apart
+   from media clips. Selected ring switches to teal — visible on the blue fill. */
+.tclip.transition { background: linear-gradient(180deg, #1d3350, #17283f); border-color: #3a6ea5; }
+.tclip.transition .label .icn { color: #8fbaff; }
+.tclip.transition.selected { box-shadow: 0 0 0 2px var(--accent2); }
+
+/* Empty spans between clips: click to select, then Delete to close the gap. */
+.tgap {
+  position: absolute; top: 0; bottom: 0; z-index: 1; cursor: pointer;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.03) 0 6px, rgba(255,255,255,.08) 6px 12px);
+  border-left: 1px dashed rgba(255,255,255,.16);
+  border-right: 1px dashed rgba(255,255,255,.16);
+}
+.tgap:hover { background: repeating-linear-gradient(45deg, rgba(255,86,82,.14) 0 6px, rgba(255,80,80,.22) 6px 12px); }
+.tgap.selected { background: repeating-linear-gradient(45deg, rgba(255,80,80,.3) 0 6px, rgba(255,80,80,.44) 6px 12px); box-shadow: inset 0 0 0 2px var(--danger); }
+
+.tsb {
+  position: absolute; top: 4px; bottom: 4px;
+  background: linear-gradient(180deg, #3d2547, #32203b);
+  border: 1px solid #6b3c75; border-radius: 5px; cursor: grab; overflow: hidden;
+}
+.tsb.selected { box-shadow: 0 0 0 2px var(--blue); z-index: 3; }
+.tsb .label { color: #edd6f5; }
+.tsb .label .icn { color: #d6a4e8; font-size: 11px; }
+.tsb .label .dur { color: #c9a6dd; margin-left: 2px; font-size: 9.5px; flex: 0 0 auto; }
+/* Waveform fills the whole item; the bottom label rides on top (z-index 2). */
+.tclip .wv, .tsb .wv { position: absolute; inset: 3px 5px; display: flex; align-items: center; gap: 1px; pointer-events: none; z-index: 1; }
+.tclip .wv { opacity: .65; }
+.tclip .wv i { flex: 1; min-width: 1px; background: rgba(120,220,205,.85); }
+.tsb .wv i { flex: 1; min-width: 1px; background: rgba(214,164,232,.7); }
+.tsb .edge { position: absolute; top: 35%; bottom: 0; width: 9px; cursor: ew-resize; z-index: 3; }
+.tsb .edge.r { right: 0; }
+.tsb .edge:hover { background: rgba(74,158,255,.3); }
+
+/* Full-height thin WHITE line down the tracks so the cut position is obvious.
+   (Without `bottom: 0` the element collapses to the 12px handle and the line
+   never reaches the tracks.) */
+#tl-playhead { position: absolute; top: 0; bottom: 0; width: 0; z-index: 20; pointer-events: none; }
+#tl-playhead::before { content: ''; position: absolute; left: -0.5px; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.85); box-shadow: 0 0 3px rgba(255,255,255,.35); }
+.ph-handle { position: absolute; top: 0; left: -6px; width: 12px; height: 12px; background: var(--accent2); border-radius: 2px 2px 6px 6px; }
+
+#drop-marker { position: absolute; top: 0; bottom: 0; width: 0; z-index: 25; pointer-events: none; }
+#drop-marker::before { content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 2px; background: var(--danger); }
+#drop-marker::after { content: ''; position: absolute; left: -3px; top: 0; border: 3px solid transparent; border-top: 6px solid var(--danger); border-bottom: 0; }
+
+/* Marquee (rubber-band) selection rectangle over the lanes. */
+#sel-box {
+  position: absolute;
+  border: 1px dashed rgba(74, 158, 255, .85);
+  background: rgba(74, 158, 255, .12);
+  pointer-events: none;
+  z-index: 15;
+  display: none;
+}
+
+/* Solid length ghost shown while dragging a bin tile: filled block on the target
+   lane spanning the inserted duration, with a duration label. */
+.drop-proxy {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -9999px;   /* offscreen until the dragover sets a real position */
+  width: 0;
+  background: rgba(74, 158, 255, .22);
+  border: 1px dashed rgba(74, 158, 255, .75);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: rgba(160, 200, 255, .95);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .85);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Name chip: a DOM overlay inside #tl-inner, parked just above the drop ghost
+   while a bin drag hovers a lane. */
+.drag-chip {
+  position: absolute;
+  z-index: 29;            /* above .drop-proxy (4) and the sticky lane labels (28) */
+  pointer-events: none;
+  background: rgba(20, 23, 28, .92);
+  border: 1px solid var(--accent);
+  color: var(--accent2);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .55);
+}
+
+/* Floating clone of the source tile, shown while the pointer is off the timeline. */
+.drag-card-float {
+  position: fixed;
+  pointer-events: none;
+  opacity: .85;
+  z-index: 9999;
+  margin: 0;
+}
+.drag-card-float .drag-card-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #07201d;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .6);
+}
+
+#snap-guide { position: absolute; top: 0; bottom: 0; width: 0; z-index: 26; pointer-events: none; }
+#snap-guide::before { content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 1px; background: var(--warn); }
+
+/* ---------- shuttle hatch texture ---------- */
+.pad-tex {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background-image: repeating-linear-gradient(45deg,
+    rgba(255, 255, 255, .05) 0 2px, transparent 2px 16px);
+  background-position-x: var(--pad-tex-x, 0px);
+}
+.pad-tex::before, .pad-tex::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 56px; z-index: 2; pointer-events: none;
+}
+.pad-tex::before { left: 0; background: linear-gradient(90deg, #191c22, transparent); }
+.pad-tex::after { right: 0; background: linear-gradient(270deg, #191c22, transparent); }
+
+#tl-scrub {
+  flex: 0 0 38px; position: relative; z-index: 5; height: 38px; display: flex; align-items: center;
+  background: linear-gradient(180deg, #1d212a 0%, #14171d 100%);
+  border-top: 1px solid var(--line2); cursor: grab; user-select: none; touch-action: none;
+  overflow: hidden; box-shadow: inset 0 6px 12px rgba(0, 0, 0, .25);
+}
+#tl-scrub:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#tl-scrub.dragging { cursor: grabbing; }
+/* nav buttons flanking the shutter: start/prev-cut on the left, next-cut/end on
+   the right. Flat, borderless, full-height squares so they read as part of the
+   pad (black & white) instead of toolbar buttons. */
+.scrub-nav { position: absolute; top: 0; bottom: 0; display: flex; align-items: stretch; gap: 0; z-index: 6; }
+.scrub-nav-l { left: 10px; }
+.scrub-nav-r { right: 10px; }
+.scrub-btn {
+  width: 78px; height: 100%; padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: transparent;
+  color: #4b5566; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: color .12s, background .12s;
+}
+.scrub-btn .icon { width: 18px; height: 18px; }
+.scrub-btn:hover:not(:disabled) { color: #e6e9ee; background: rgba(255, 255, 255, .06); }
+.scrub-btn:active:not(:disabled) { background: rgba(255, 255, 255, .12); transform: translateY(1px); }
+.scrub-btn:disabled { opacity: .28; cursor: default; }
+.scrub-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+#timeline-panel.dragging { outline: 2px dashed var(--accent); outline-offset: -3px; }
+
+/* ---------- forms ---------- */
+.row { display: flex; gap: 6px; align-items: center; }
+.inputs input[type="number"] { width: 100%; }
+input[type="number"], input[type="text"], select {
+  background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+  color: var(--text); padding: 5px 8px; font-size: 12px; font-family: inherit;
+}
+input[type="number"]:focus, input[type="text"]:focus, select:focus { outline: none; border-color: var(--accent); }
+input[type="checkbox"] { accent-color: var(--accent); }
+
+/* ---------- statusbar ---------- */
+#statusbar { flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 6px 12px;
+  background: var(--bg2); border-top: 1px solid var(--line); height: 34px; font-size: 12px; }
+#status-msg { min-width: 200px; }
+.muted { color: var(--muted); }
+.progress-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
+#progress-bar { flex: 1; height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; border: 1px solid var(--line); }
+#progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width .15s; }
+#progress-eta { min-width: 76px; font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ---------- modal ---------- */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal-card { background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; width: 480px; max-height: 90vh; overflow-y: auto; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.modal-card h2 { margin: 0 0 16px; font-size: 16px; }
+.field { display: block; margin-bottom: 10px; }
+.field > span { display: block; color: var(--muted); font-size: 11.5px; margin-bottom: 4px; }
+.field input[type="text"], .field input[type="number"] { width: 100%; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.check { display: flex; align-items: center; gap: 8px; margin: 12px 0; color: var(--text); }
+
+/* Help modal body */
+.help-body p { margin: 0 0 12px; line-height: 1.5; }
+.help-keys { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.help-keys td { padding: 3px 8px; border-bottom: 1px solid var(--line); font-size: 12px; vertical-align: top; }
+.help-keys td:first-child { width: 130px; color: var(--text); }
+
+/* History modal */
+.history-list { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; }
+.hist-item {
+  text-align: left; padding: 5px 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--text); font: inherit; cursor: pointer;
+}
+.hist-item:hover { background: var(--btn-hover); }
+.hist-item.dim { color: var(--muted); }
+.modal-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+
+/* Purge-used-media modal */
+.purge-body { display: flex; flex-direction: column; }
+.purge-body p { margin: 0 0 10px; line-height: 1.5; font-size: 12.5px; }
+.purge-list {
+  display: flex; flex-direction: column; gap: 1px; max-height: 44vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px; background: var(--bg);
+}
+.purge-item { display: flex; align-items: baseline; gap: 10px; font-size: 12px; padding: 2px 2px; }
+.purge-item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.purge-item .sz { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---------- video zoom effect ---------- */
+.tl-zoom { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.tl-zoom span { font-size: 12px; }
+.tl-zoom select { padding: 2px 4px; font-size: 12px; background: var(--bg3); color: var(--text); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.tl-zoom select:disabled { opacity: .45; cursor: default; }
+#btn-zoom-ease, #btn-zoom-bg { min-width: 62px; }
+
+/* Per-effect tools: only the panel for the selected effect's type is shown. */
+.fx-sub { display: flex; align-items: center; gap: 6px; }
+.tl-shake { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.tl-shake input[type="range"] { width: 110px; accent-color: var(--accent); cursor: pointer; }
+.tl-shake input[type="range"]:disabled { opacity: .45; cursor: default; }
+.tl-shake input[type="number"] { width: 56px; }
+
+/* Zoom band drawn inside a clip; two handles retime the animation. Handles sit
+   in the top strip so they never fight the trim edges along the bottom. */
+.zoomband {
+  position: absolute; top: 0; bottom: 0; z-index: 4; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255,201,77,.18), rgba(255,201,77,.04));
+  border-left: 1px solid rgba(255,201,77,.75); border-right: 1px solid rgba(255,201,77,.75);
+}
+.zoomband::after {
+  content: 'ZOOM'; position: absolute; bottom: 2px; left: 4px; font-size: 8px; letter-spacing: .5px;
+  color: #ffd76a; text-shadow: 0 1px 2px rgba(0,0,0,.85);
+}
+.zoom-handle { position: absolute; top: 0; height: 34%; width: 12px; z-index: 7; cursor: ew-resize; pointer-events: auto; }
+.zoom-handle::after {
+  content: ''; position: absolute; top: 50%; left: 4px; width: 4px; height: 12px; margin-top: -6px;
+  background: #ffd76a; border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,.7);
+}
+.zoom-handle.l { left: 0; }
+.zoom-handle.r { right: 0; }
+.zoom-handle:hover::after { background: #fff; }
+
+/* Preview centre crosshair + level readout while editing a zoom. */
+.zoom-cross { position: absolute; z-index: 8; width: 26px; height: 26px; margin: -13px 0 0 -13px; pointer-events: none; }
+.zoom-cross::before, .zoom-cross::after { content: ''; position: absolute; background: rgba(255,215,106,.95); box-shadow: 0 0 3px rgba(0,0,0,.85); }
+.zoom-cross::before { left: 12px; top: 0; width: 2px; height: 26px; }
+.zoom-cross::after { top: 12px; left: 0; height: 2px; width: 26px; }
+.zoom-hud {
+  position: absolute; top: 8px; left: 8px; z-index: 8; pointer-events: none;
+  font-size: 11px; font-variant-numeric: tabular-nums; padding: 2px 7px; border-radius: 4px;
+  color: #0b0d10; background: rgba(255,215,106,.92);
+}
+
+/* ---------- camera effects (adjustment layers) ---------- */
+.effects-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px;
+}
+.effect-tile {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; min-width: 0;
+  border: 1px solid rgba(150,90,220,.6); border-radius: 6px;
+  background: linear-gradient(180deg, rgba(150,90,220,.18), rgba(120,70,190,.10));
+  cursor: grab; user-select: none;
+}
+.effect-tile:hover { border-color: #c9a0ff; background: linear-gradient(180deg, rgba(150,90,220,.28), rgba(120,70,190,.16)); }
+.effect-tile-icon { color: #c9a0ff; font-size: 16px; flex: 0 0 auto; }
+.effect-tile-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Purple band overlaid on a video lane; grabs like any item (hide via the FX toggle). */
+.effectband {
+  position: absolute; top: 2px; bottom: 2px; z-index: 9;
+  background: linear-gradient(180deg, rgba(150,90,220,.34), rgba(120,70,190,.22));
+  border: 1px solid rgba(185,135,245,.9); border-radius: 5px; overflow: hidden; cursor: grab;
+}
+.effectband.selected { box-shadow: 0 0 0 2px #c9a0ff, 0 1px 4px rgba(0,0,0,.5); z-index: 10; }
+.effectband-head {
+  position: absolute; left: 0; right: 0; top: 0; height: 15px; padding: 0 5px;
+  display: flex; align-items: center; font-size: 9px; letter-spacing: .5px;
+  color: #f0e6ff; background: linear-gradient(180deg, rgba(120,70,190,.85), rgba(120,70,190,.5));
+  white-space: nowrap; overflow: hidden; pointer-events: none;
+}
+.effect-handle { position: absolute; top: 0; bottom: 0; width: 9px; cursor: ew-resize; z-index: 2; }
+.effect-handle.l { left: 0; }
+.effect-handle.r { right: 0; }
+.effect-handle::after { content: ''; position: absolute; top: 40%; bottom: 40%; left: 4px; width: 2px; background: rgba(240,230,255,.85); border-radius: 1px; }
+.effect-handle:hover::after { background: #fff; }
+#bin-effects.collapsed .bin-body { display: none; }
+
+/* A/D hint for the selected item: edge mode vs global jumping mode. */
+.ad-nav-hint {
+  font-size: 10.5px; font-variant-numeric: tabular-nums; padding: 1px 6px; border-radius: 4px;
+  color: var(--muted); border: 1px solid var(--line); white-space: nowrap;
+}
+.ad-nav-hint.global { color: #ffd76a; border-color: rgba(255,215,106,.6); background: rgba(255,215,106,.12); }
+
+/* ---------- notifications (toasts) ---------- */
+#toasts {
+  position: fixed; right: 14px; bottom: 54px; z-index: 45;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  pointer-events: none; max-width: min(360px, 42vw);
+}
+.toast {
+  pointer-events: auto; cursor: pointer;
+  padding: 9px 12px; border-radius: 8px;
+  background: var(--bg2); color: var(--text);
+  border: 1px solid var(--line2);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5);
+  font-size: 12.5px; line-height: 1.35;
+  animation: toast-in .18s ease-out;
+}
+.toast.warn { border-color: rgba(224,169,74,.9); }
+.toast.danger { border-color: var(--danger); }
+.toast.out { opacity: 0; transform: translateY(8px); transition: opacity .25s ease, transform .25s ease; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Save button: colour ages since the last save; a dot marks unsaved changes. */
+#btn-save.age-green { box-shadow: inset 3px 0 0 #22c55e; }
+#btn-save.age-yellow { box-shadow: inset 3px 0 0 #e0a94a; }
+#btn-save.age-orange { box-shadow: inset 3px 0 0 #e08a4a; }
+#btn-save.age-red { box-shadow: inset 3px 0 0 var(--danger); }
+#btn-save.dirty::after {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--danger); margin-left: 2px; flex: 0 0 auto;
+}

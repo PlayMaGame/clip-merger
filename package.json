@@ -1,0 +1,15 @@
+{
+  "name": "clip-merger",
+  "version": "0.8.1",
+  "description": "A basic lossless-first clip merger with a multi-clip timeline and soundboard audio track.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
