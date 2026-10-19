@@ -4,6 +4,8 @@ A simple, DaVinci-like **clip merger** desktop app for Windows (Electron + ffmpe
 Put clips, transitions and sounds on a timeline, cut them around, and export a single
 merged video — **lossless-first** (stream-copies cuts that land on keyframes).
 
+![Clip Merger screenshot](screenshot.jpg)
+
 ## Features
 
 - **3 media bins** (across the top, resizable, collapsible, thumbnail grids with own scrollbars):
