@@ -2555,10 +2555,10 @@ function jumpToEnd() {
 function soleSelectedItemEdges() {
   const total = state.selectedIds.size + state.selectedSbs.size + state.selectedHyb.size + state.selectedEff.size;
   if (total !== 1) return null;
-  if (state.selectedIds.size) { const c = clipSelection()[0]; return [c.start || 0, (c.start || 0) + durOf(c)]; }
-  if (state.selectedSbs.size) { const s = soundSelection()[0]; return [s.startTime || 0, (s.startTime || 0) + sndDur(s)]; }
-  if (state.selectedHyb.size) { const h = hybSelection()[0]; return [hybStartOf(h), hybStartOf(h) + hybDurOf(h)]; }
-  if (state.selectedEff.size) { const e = effSelection()[0]; return [e.start || 0, effectEnd(e)]; }
+  if (state.selectedIds.size) { const c = clipSelection()[0]; return c ? [c.start || 0, (c.start || 0) + durOf(c)] : null; }
+  if (state.selectedSbs.size) { const s = soundSelection()[0]; return s ? [s.startTime || 0, (s.startTime || 0) + sndDur(s)] : null; }
+  if (state.selectedHyb.size) { const h = hybSelection()[0]; return h ? [hybStartOf(h), hybStartOf(h) + hybDurOf(h)] : null; }
+  if (state.selectedEff.size) { const e = effSelection()[0]; return e ? [e.start || 0, effectEnd(e)] : null; }
   return null;
 }
 
@@ -2706,7 +2706,7 @@ function previewPoseTime() {
   if (state.playing) {
     const el = $('#preview');
     const seg = videoSegments()[srcInfo.bIndex];
-    if (el && seg && !el.paused) t = seg.start + (el.currentTime - seg.srcStart) / speedOf(seg.item);
+    if (el && seg && !TimelineOps.isStill(seg.item) && !el.paused) t = seg.start + (el.currentTime - seg.srcStart) / speedOf(seg.item);
   }
   const eff = soleSelectedEffect();
   if (eff) {
@@ -2931,6 +2931,17 @@ function renderEffectsBin() {
   list.innerHTML = '';
   const grid = document.createElement('div');
   grid.className = 'effects-grid';
+  // Freeze frame is an action (not a draggable camera effect): click it to
+  // insert a 3s still at the playhead, splitting the clip underneath if needed.
+  const fz = document.createElement('div');
+  fz.className = 'effect-tile freeze-tile';
+  fz.id = 'effect-freeze';
+  fz.title = 'Insert a 3s freeze frame at the playhead';
+  const fzi = document.createElement('span'); fzi.className = 'effect-tile-icon'; fzi.textContent = '❄';
+  const fzn = document.createElement('span'); fzn.className = 'effect-tile-name'; fzn.textContent = 'Freeze';
+  fz.append(fzi, fzn);
+  fz.addEventListener('click', () => insertFreeze());
+  grid.appendChild(fz);
   const defs = EFFECT_DEFS.slice().sort((a, b) => {
     const dr = ratingOf(effectLibKey(b.defId)) - ratingOf(effectLibKey(a.defId));
     return dr || a.name.localeCompare(b.name);
@@ -2975,6 +2986,7 @@ function renderEffectsBin() {
     grid.appendChild(card);
   }
   list.appendChild(grid);
+  updateFreezeButton();
 }
 
 // Reflect the active clip's Mute and framing (fit) onto the 9:16 program preview.
@@ -3306,13 +3318,16 @@ async function seekPreview(t) {
   updateTimeReadout();
   if (state.playing) syncSoundPreview(true); // re-sync sounds after a seek during playback
   const bk = visibleVideoAt(t);
-  if (!bk) return;
-  if (isImageItem(bk.item)) {
-    srcInfo = { id: bk.item.id, path: bk.item.path, bIndex: bk.index, ready: true };
-    syncActiveMute();
-    return;
-  }
-  if (bk.item.kind === 'freeze') {
+  if (!bk) { if (!state.playing) stopStillPlayback(); return; }
+  const wasStill = stillIdx >= 0;
+  if (TimelineOps.isStill(bk.item)) {
+    if (state.playing) { await beginStillSegment(bk.seg, bk.index, t); return; }
+    stopStillPlayback();
+    if (isImageItem(bk.item)) {
+      srcInfo = { id: bk.item.id, path: bk.item.path, bIndex: bk.index, ready: true };
+      syncActiveMute();
+      return;
+    }
     const seqNo = ++seekSeq;
     try { await ensureLoaded(bk.item, bk.index); } catch (_) { return; }
     if (seqNo !== seekSeq) return;
@@ -3324,6 +3339,8 @@ async function seekPreview(t) {
     syncActiveMute();
     return;
   }
+  if (wasStill && state.playing) { await beginVideoSegment(bk.seg, bk.index); return; }
+  if (!state.playing) stopStillPlayback();
   const seq = ++seekSeq;
   try {
     await ensureLoaded(bk.item, bk.index);
@@ -3368,24 +3385,10 @@ async function togglePlay() {
     startMonitor(true);
     return;
   }
-  if (isImageItem(b.item)) {
-    // A still holds the frame while the clock advances (and sounds stay in sync).
-    srcInfo = { id: b.item.id, path: b.item.path, bIndex: b.index, ready: true };
+  if (TimelineOps.isStill(b.item)) {
+    // Images and freeze frames hold their frame while the still clock runs.
     syncSoundPreview(true);
-    syncActiveMute();
-    startMonitor(true);
-    startZoomLoop();
-    return;
-  }
-  if (b.item.kind === 'freeze') {
-    await ensureLoaded(b.item, b.index);
-    cancelPreviewSeek();
-    v.pause();
-    v.playbackRate = 1;
-    try { v.currentTime = b.item.freezeAt || 0; } catch (_) {}
-    syncSoundPreview(true);
-    syncActiveMute();
-    startMonitor(true);
+    await beginStillSegment(b.seg, b.index, state.playhead);
     startZoomLoop();
     return;
   }
@@ -3407,6 +3410,7 @@ function pausePlay() {
   state.playing = false;
   setPlayIcon(false);
   stopZoomLoop();
+  stopStillPlayback();
   $('#preview').pause();
   try { $('#preview-b').pause(); } catch (_) {}
   try { $('#preview-bg').pause(); } catch (_) {}
@@ -3414,19 +3418,135 @@ function pausePlay() {
   pauseSoundEls();
 }
 
-/* ---------------- mic recorder ---------------- */
+/* ---- still playback (images & freeze frames) ----
+   A still has no `<video>` to drive the clock, so playback runs its own
+   wall-clock rAF that advances the playhead across the segment's span, then
+   hands off to whatever comes next (still or video) instead of dead-ending. */
+let stillRaf = 0;
+let stillIdx = -1;
+function stopStillPlayback() {
+  if (stillRaf) { cancelAnimationFrame(stillRaf); stillRaf = 0; }
+  stillIdx = -1;
+}
+function startStillPlayback(idx, from) {
+  stopMonitor();
+  if (stillRaf) { cancelAnimationFrame(stillRaf); stillRaf = 0; }
+  const seq = videoSegments();
+  const seg = seq[idx];
+  if (!seg) { stopStillPlayback(); return; }
+  stillIdx = idx;
+  const startT = Math.max(seg.start, Math.min(seg.end, from));
+  state.playhead = startT;
+  const t0 = performance.now();
+  let lastSound = 0;
+  const tick = () => {
+    if (!state.playing || stillIdx !== idx) { stillRaf = 0; return; }
+    const now = performance.now();
+    const t = Math.min(seg.end, startT + (now - t0) / 1000);
+    state.playhead = t;
+    updatePlayhead();
+    updateTimeReadout();
+    updatePreviewZoomTransform();
+    if (now - lastSound > 90) { lastSound = now; syncSoundPreview(false); }
+    if (t >= seg.end - 1e-6) { stillRaf = 0; advanceStillPlayback(idx); return; }
+    stillRaf = requestAnimationFrame(tick);
+  };
+  stillRaf = requestAnimationFrame(tick);
+}
+async function beginStillSegment(seg, idx, from) {
+  if (!seg) return;
+  stopMonitor();
+  const item = seg.item;
+  state.playhead = Math.max(seg.start, Math.min(seg.end, from == null ? seg.start : from));
+  if (isImageItem(item)) {
+    srcInfo = { id: item.id, path: item.path, bIndex: idx, ready: true };
+    try { $('#preview').pause(); } catch (_) {}
+    syncActiveMute();
+    syncSoundPreview(false);
+    startStillPlayback(idx, state.playhead);
+    return;
+  }
+  // Freeze frame: load the source and hold one frame, then run the still clock.
+  try { await ensureLoaded(item, idx); } catch (_) { return; }
+  cancelPreviewSeek();
+  const v = $('#preview');
+  if (v) {
+    try { v.pause(); } catch (_) {}
+    v.playbackRate = 1;
+    try { v.currentTime = item.freezeAt || 0; } catch (_) {}
+  }
+  srcInfo = { id: item.id, path: item.path, bIndex: idx, ready: true };
+  syncActiveMute();
+  syncSoundPreview(false);
+  startStillPlayback(idx, state.playhead);
+}
+async function beginVideoSegment(seg, idx) {
+  if (!seg) return;
+  stopStillPlayback();
+  const item = seg.item;
+  state.playhead = seg.start;
+  try { await ensureLoaded(item, idx); } catch (_) { return; }
+  cancelPreviewSeek();
+  const v = $('#preview');
+  if (!v) return;
+  v.playbackRate = speedOf(item);
+  v.currentTime = seg.srcStart;
+  syncActiveMute();
+  syncPreviewBgTime(v.currentTime);
+  syncSoundPreview(false);
+  startMonitor(false);
+  startZoomLoop();
+  prefetchStandby(idx + 1);
+  await v.play().catch(() => {});
+  const bg = $('#preview-bg');
+  if (bg && document.getElementById('viewer-program').classList.contains('bg-on')) bg.play().catch(() => {});
+}
+function advanceStillPlayback(idx) {
+  const seq = videoSegments();
+  const cur = seq[idx];
+  const next = seq[idx + 1];
+  if (next) {
+    if (TimelineOps.isStill(next.item)) beginStillSegment(next, idx + 1, next.start);
+    else beginVideoSegment(next, idx + 1);
+    return;
+  }
+  if (cur && totalDuration() > cur.end + 1e-6) {
+    state.playhead = cur.end;
+    updatePlayhead(); updateTimeReadout();
+    syncSoundPreview(true);
+    startMonitor(true);
+    return;
+  }
+  state.playhead = totalDuration();
+  updatePlayhead(); updateTimeReadout();
+  pausePlay();
+}
+
+/* ---------------- mic recorder (two-track: MAIN / ALT) ---------------- */
 const mic = {
   ctx: null, stream: null, source: null, processor: null, sink: null,
-  samples: new Float32Array(0), length: 0, sampleRate: 48000,
-  trimStart: 0, trimEnd: 0, playhead: 0,
-  recording: false, recordPos: 0,
-  playing: false, playNode: null, playStartCtx: 0, playStartPos: 0,
-  raf: 0, saved: false, trimDrag: null,
+  sampleRate: 48000,
+  tracks: { main: [], alt: [] },
+  activeTrack: 'main',
+  selectedId: null,
+  playhead: 0,
+  recording: false, recChunks: null, recStart: 0, recTrack: 'main',
+  playing: false, playNodes: [], playStartCtx: 0, playStartPos: 0, playEnd: 0,
+  raf: 0, saved: true, drag: null,
 };
-
-function micTakeDur() { return mic.length / mic.sampleRate; }
-function micTrimStartSec() { return mic.trimStart / mic.sampleRate; }
-function micTrimEndSec() { return mic.trimEnd / mic.sampleRate; }
+let micIdSeq = 0;
+function micNewId() { micIdSeq += 1; return 'm' + micIdSeq; }
+function micClips() { return mic.tracks.main.concat(mic.tracks.alt); }
+function micClipById(id) { return micClips().find((c) => c.id === id) || null; }
+function micEnd() { return MicModel.takesEnd(micClips(), mic.sampleRate); }
+function micTrackOf(id) {
+  if (mic.tracks.main.some((c) => c.id === id)) return 'main';
+  if (mic.tracks.alt.some((c) => c.id === id)) return 'alt';
+  return null;
+}
+// Visible span of the mini timeline: at least 5s so there is room to place the
+// playhead and record a first take on an empty editor.
+function micSpan() { return Math.max(5, micEnd(), mic.playhead + 0.25); }
 
 function micEnsureCtx() {
   if (mic.ctx) return mic.ctx;
@@ -3439,30 +3559,18 @@ function micEnsureCtx() {
 }
 
 function micReset() {
-  mic.samples = new Float32Array(0);
-  mic.length = 0;
-  mic.trimStart = 0;
-  mic.trimEnd = 0;
+  mic.tracks = { main: [], alt: [] };
+  mic.activeTrack = 'main';
+  mic.selectedId = null;
   mic.playhead = 0;
   mic.recording = false;
-  mic.recordPos = 0;
+  mic.recChunks = null;
+  mic.recStart = 0;
+  mic.recTrack = 'main';
   mic.playing = false;
-  mic.playNode = null;
-  mic.saved = false;
-  mic.trimDrag = null;
-}
-
-function micWrite(chunk, at) {
-  const need = at + chunk.length;
-  if (need > mic.samples.length) {
-    let cap = Math.max(need, mic.samples.length * 2, mic.sampleRate * 5);
-    const next = new Float32Array(cap);
-    next.set(mic.samples.subarray(0, mic.length));
-    mic.samples = next;
-  }
-  mic.samples.set(chunk, at);
-  if (need > mic.length) mic.length = need;
-  if (need > mic.trimEnd) mic.trimEnd = need;
+  mic.playNodes = [];
+  mic.drag = null;
+  mic.saved = true;
 }
 
 async function micStartCapture() {
@@ -3488,9 +3596,10 @@ async function micStartCapture() {
     const input = ev.inputBuffer.getChannelData(0);
     const chunk = new Float32Array(input.length);
     chunk.set(input);
-    micWrite(chunk, mic.recordPos);
-    mic.recordPos += chunk.length;
-    mic.playhead = mic.recordPos / mic.sampleRate;
+    mic.recChunks.push(chunk);
+    let n = 0;
+    for (const c of mic.recChunks) n += c.length;
+    mic.playhead = mic.recStart + n / mic.sampleRate;
   };
   // A muted sink keeps the processor pulling without monitoring the mic.
   mic.sink = ctx.createGain();
@@ -3512,20 +3621,21 @@ function micStopCapture() {
   mic.stream = null;
 }
 
+function micStopPlay() {
+  for (const n of mic.playNodes) { try { n.stop(); } catch (_) {} }
+  mic.playNodes = [];
+  mic.playing = false;
+}
+
 async function micToggleRecord() {
-  if (mic.recording) {
-    micStopCapture();
-    micUpdateUI();
-    micDraw();
-    return;
-  }
-  if (mic.playing) micPauseTake();
-  const at = Math.max(0, Math.min(mic.length, Math.round(mic.playhead * mic.sampleRate)));
-  mic.recordPos = at;
-  mic.trimStart = Math.min(mic.trimStart, at);
-  try {
-    await micStartCapture();
-  } catch (e) {
+  if (mic.recording) { micFinishRecord(); return; }
+  if (mic.playing) micStopPlay();
+  const total = micEnd();
+  mic.recStart = Math.max(0, Math.min(total, mic.playhead));
+  mic.recTrack = mic.activeTrack;
+  mic.recChunks = [];
+  try { await micStartCapture(); }
+  catch (e) {
     toast('Microphone unavailable: ' + (e && e.message ? e.message : e), { danger: true });
     return;
   }
@@ -3536,53 +3646,66 @@ async function micToggleRecord() {
   setStatus('Recording… click Stop to finish');
 }
 
-function micPauseTake() {
-  if (!mic.playing) return;
-  const ctx = mic.ctx;
-  if (ctx) mic.playhead = mic.playStartPos + (ctx.currentTime - mic.playStartCtx);
-  mic.playhead = Math.max(micTrimStartSec(), Math.min(micTrimEndSec(), mic.playhead));
-  try { if (mic.playNode) mic.playNode.stop(); } catch (_) {}
-  mic.playNode = null;
-  mic.playing = false;
+// Turn the captured chunks into a clip on the record track. Anything already on
+// that track under the recorded span is removed (punch-in overwrite).
+function micFinishRecord() {
+  micStopCapture();
+  const chunks = mic.recChunks || [];
+  let n = 0;
+  for (const c of chunks) n += c.length;
+  mic.recChunks = null;
+  if (n < 1) { micUpdateUI(); micDraw(); return; }
+  const samples = new Float32Array(n);
+  let off = 0;
+  for (const c of chunks) { samples.set(c, off); off += c.length; }
+  const sr = mic.sampleRate;
+  const clip = { id: micNewId(), track: mic.recTrack, start: mic.recStart, samples };
+  const keep = MicModel.punchTrack(mic.tracks[mic.recTrack], mic.recStart, mic.recStart + n / sr, sr, micNewId);
+  mic.tracks[mic.recTrack] = keep.concat(clip).sort((a, b) => a.start - b.start);
+  mic.selectedId = clip.id;
+  mic.activeTrack = mic.recTrack;
+  mic.playhead = MicModel.clipEnd(clip, sr);
+  mic.saved = false;
   micUpdateUI();
   micDraw();
+  setStatus('Take recorded — drag / split / trim, then Save');
 }
 
-async function micTogglePlay() {
-  if (mic.recording) micStopCapture();
-  if (mic.playing) { micPauseTake(); return; }
-  if (mic.trimEnd <= mic.trimStart) return;
-  if (mic.playhead < micTrimStartSec() || mic.playhead >= micTrimEndSec()) mic.playhead = micTrimStartSec();
+function micTogglePlay() {
+  if (mic.recording) micFinishRecord();
+  if (mic.playing) { micStopPlay(); micUpdateUI(); micDraw(); return; }
   const ctx = micEnsureCtx();
-  if (ctx.state === 'suspended') await ctx.resume();
-  const start = mic.trimStart;
-  const len = mic.trimEnd - mic.trimStart;
-  if (len <= 0) return;
-  const buf = ctx.createBuffer(1, len, mic.sampleRate);
-  buf.copyToChannel(mic.samples.subarray(start, mic.trimEnd), 0);
-  const node = ctx.createBufferSource();
-  node.buffer = buf;
-  node.connect(ctx.destination);
-  node.onended = () => {
-    if (mic.playNode !== node) return;
-    mic.playNode = null;
-    mic.playing = false;
-    mic.playhead = micTrimEndSec();
-    micUpdateUI();
-    micDraw();
-  };
-  mic.playNode = node;
-  mic.playStartCtx = ctx.currentTime;
-  mic.playStartPos = mic.playhead;
+  const sr = mic.sampleRate;
+  const clips = micClips().filter((c) => MicModel.clipEnd(c, sr) > mic.playhead + 1e-6);
+  if (!clips.length) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  const t0 = ctx.currentTime + 0.03;
+  mic.playNodes = [];
+  let last = mic.playhead;
+  for (const c of clips) {
+    const from = Math.max(c.start, mic.playhead);
+    const srcOff = from - c.start;
+    const dur = MicModel.clipEnd(c, sr) - from;
+    if (dur <= 0) continue;
+    const buf = ctx.createBuffer(1, c.samples.length, sr);
+    buf.copyToChannel(c.samples, 0);
+    const node = ctx.createBufferSource();
+    node.buffer = buf;
+    node.connect(ctx.destination);
+    node.start(t0 + Math.max(0, c.start - mic.playhead), Math.max(0, srcOff), dur);
+    mic.playNodes.push(node);
+    last = Math.max(last, MicModel.clipEnd(c, sr));
+  }
   mic.playing = true;
-  node.start(0, Math.max(0, mic.playhead - micTrimStartSec()));
+  mic.playStartCtx = t0;
+  mic.playStartPos = mic.playhead;
+  mic.playEnd = last;
   micLoop();
 }
 
 function micStopTake() {
-  if (mic.recording) micStopCapture();
-  if (mic.playing) micPauseTake();
-  mic.playhead = micTrimStartSec();
+  if (mic.recording) micFinishRecord();
+  if (mic.playing) micStopPlay();
   micUpdateUI();
   micDraw();
 }
@@ -3590,15 +3713,11 @@ function micStopTake() {
 function micLoop() {
   if (mic.raf) { cancelAnimationFrame(mic.raf); mic.raf = 0; }
   const tick = () => {
-    if ($('#mic-modal').classList.contains('hidden')) { mic.raf = 0; return; }
+    const modal = $('#mic-modal');
+    if (!modal || modal.classList.contains('hidden')) { mic.raf = 0; return; }
     if (mic.playing && mic.ctx) {
       mic.playhead = mic.playStartPos + (mic.ctx.currentTime - mic.playStartCtx);
-      if (mic.playhead >= micTrimEndSec()) {
-        mic.playhead = micTrimEndSec();
-        mic.playing = false;
-        try { if (mic.playNode) mic.playNode.stop(); } catch (_) {}
-        mic.playNode = null;
-      }
+      if (mic.playhead >= mic.playEnd) { mic.playhead = mic.playEnd; micStopPlay(); }
     }
     micUpdateUI();
     micDraw();
@@ -3608,11 +3727,10 @@ function micLoop() {
 }
 
 function micUpdateUI() {
-  const dur = micTakeDur();
-  const ph = Math.max(0, Math.min(dur, mic.playhead));
-  const time = `${ph.toFixed(3)} / ${dur.toFixed(3)}`;
+  const dur = micEnd();
+  const ph = Math.max(0, Math.min(Math.max(dur, 0), mic.playhead));
   const t = $('#mic-time');
-  if (t) t.textContent = time;
+  if (t) t.textContent = `${ph.toFixed(3)} / ${dur.toFixed(3)}`;
   const rec = $('#mic-rec-dot');
   if (rec) rec.classList.toggle('hidden', !mic.recording);
   const rl = $('#mic-record-label');
@@ -3621,77 +3739,159 @@ function micUpdateUI() {
   if (pl) pl.textContent = mic.playing ? 'Pause' : 'Play';
   const use = $('#mic-use-play');
   if (use) use.setAttribute('href', mic.playing ? '#i-pause' : '#i-play');
+  const del = $('#mic-del');
+  if (del) del.disabled = !mic.selectedId;
+  const sp = $('#mic-split');
+  if (sp) sp.disabled = !mic.selectedId;
+  for (const el of $$('.mic-lane')) el.classList.toggle('active', el.dataset.track === mic.activeTrack);
 }
+
+function micLaneCanvas(track) { return $(track === 'alt' ? '#mic-wave-alt' : '#mic-wave-main'); }
 
 function micDraw() {
-  const canvas = $('#mic-wave');
-  if (!canvas) return;
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = Math.round(rect.width * dpr);
-  const h = Math.round(rect.height * dpr);
-  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-  const g = canvas.getContext('2d');
-  g.clearRect(0, 0, w, h);
-  const dur = mic.length;
-  const mid = h / 2;
-  if (!dur) {
-    g.fillStyle = 'rgba(255,255,255,.28)';
-    g.font = `${12 * dpr}px sans-serif`;
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillText('Press Record to start a take', w / 2, mid);
-    const l = $('#mic-trim-l'), r = $('#mic-trim-r'), ph = $('#mic-playhead');
-    if (l) l.style.left = '0%';
-    if (r) r.style.right = '0%';
-    if (ph) ph.style.left = '0%';
-    return;
-  }
-  // Dim the trimmed-away head/tail.
-  const x0 = (mic.trimStart / dur) * w;
-  const x1 = (mic.trimEnd / dur) * w;
-  g.fillStyle = 'rgba(0,0,0,.45)';
-  g.fillRect(0, 0, Math.max(0, x0), h);
-  g.fillRect(Math.max(0, x1), 0, Math.max(0, w - x1), h);
-
-  const buckets = Math.max(1, Math.floor(w / 2));
-  g.strokeStyle = 'rgba(120, 220, 255, .95)';
-  g.lineWidth = Math.max(1, dpr);
-  g.beginPath();
-  for (let i = 0; i < buckets; i++) {
-    const a = Math.floor((i / buckets) * dur);
-    const b = Math.max(a + 1, Math.floor(((i + 1) / buckets) * dur));
-    const step = Math.max(1, Math.floor((b - a) / 12));
-    let peak = 0;
-    for (let j = a; j < b; j += step) {
-      const v = Math.abs(mic.samples[j] || 0);
-      if (v > peak) peak = v;
+  const total = micSpan();
+  for (const track of ['main', 'alt']) {
+    const canvas = micLaneCanvas(track);
+    if (!canvas) continue;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) continue;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(rect.width * dpr);
+    const h = Math.round(rect.height * dpr);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const g = canvas.getContext('2d');
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = track === 'alt' ? 'rgba(255,255,255,.03)' : 'rgba(255,255,255,.05)';
+    g.fillRect(0, 0, w, h);
+    for (const c of mic.tracks[track]) {
+      const x0 = (c.start / total) * w;
+      const x1 = (MicModel.clipEnd(c, mic.sampleRate) / total) * w;
+      const cw = Math.max(2, x1 - x0);
+      g.fillStyle = c.id === mic.selectedId ? 'rgba(90,200,255,.34)' : 'rgba(90,200,255,.18)';
+      g.fillRect(x0, 0, cw, h);
+      g.strokeStyle = c.id === mic.selectedId ? 'rgba(150,230,255,.95)' : 'rgba(120,200,255,.55)';
+      g.lineWidth = Math.max(1, dpr);
+      g.strokeRect(x0 + 0.5, 0.5, Math.max(1, cw - 1), h - 1);
+      const mid = h / 2;
+      const buckets = Math.max(1, Math.floor(cw / 2));
+      g.strokeStyle = 'rgba(205,240,255,.85)';
+      g.beginPath();
+      for (let i = 0; i < buckets; i++) {
+        const a = Math.floor((i / buckets) * c.samples.length);
+        const b = Math.max(a + 1, Math.floor(((i + 1) / buckets) * c.samples.length));
+        const step = Math.max(1, Math.floor((b - a) / 12));
+        let peak = 0;
+        for (let j = a; j < b; j += step) { const v = Math.abs(c.samples[j] || 0); if (v > peak) peak = v; }
+        const half = Math.max(dpr * 0.75, peak * (h / 2 - 4 * dpr));
+        const x = x0 + (i / buckets) * cw;
+        g.moveTo(x, mid - half);
+        g.lineTo(x, mid + half);
+      }
+      g.stroke();
+      g.fillStyle = 'rgba(255,255,255,.45)';
+      g.fillRect(x0, 0, Math.max(1, 2 * dpr), h);
+      g.fillRect(Math.max(x0, x1 - Math.max(1, 2 * dpr)), 0, Math.max(1, 2 * dpr), h);
     }
-    const half = Math.max(dpr * 0.75, peak * (h / 2 - 6 * dpr));
-    const x = (i / buckets) * w;
-    g.moveTo(x, mid - half);
-    g.lineTo(x, mid + half);
+    if (mic.recording && track === mic.recTrack) {
+      const rx = (mic.recStart / total) * w;
+      g.fillStyle = 'rgba(255,80,80,.55)';
+      g.fillRect(rx, 0, Math.max(1, dpr), h);
+    }
   }
-  g.stroke();
-
-  const l = $('#mic-trim-l'), r = $('#mic-trim-r'), ph = $('#mic-playhead');
-  if (l) l.style.left = `${(mic.trimStart / dur) * 100}%`;
-  if (r) r.style.right = `${((1 - mic.trimEnd / dur) * 100)}%`;
-  if (ph) {
-    const px = Math.max(0, Math.min(dur, mic.playhead * mic.sampleRate));
-    ph.style.left = `${(px / dur) * 100}%`;
+  const mini = $('#mic-mini');
+  const ph = $('#mic-playhead');
+  if (mini && ph) {
+    const r = mini.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, mic.playhead / total)) * r.width;
+    ph.style.transform = `translateX(${x}px)`;
   }
 }
 
-function micMiniTimeAt(clientX) {
-  const box = $('#mic-mini').getBoundingClientRect();
-  if (!box.width || !mic.length) return 0;
-  return Math.max(0, Math.min(mic.length, Math.round(((clientX - box.left) / box.width) * mic.length)));
+function micLaneAt(e) {
+  const lane = e.target && e.target.closest ? e.target.closest('.mic-lane') : null;
+  return lane ? lane.dataset.track : null;
+}
+function micTimeAtLane(track, clientX) {
+  const canvas = micLaneCanvas(track);
+  if (!canvas) return 0;
+  const r = canvas.getBoundingClientRect();
+  const total = micSpan();
+  return Math.max(0, Math.min(total, ((clientX - r.left) / Math.max(1, r.width)) * total));
 }
 
-function micClampPlayhead() {
-  mic.playhead = Math.max(micTrimStartSec(), Math.min(micTrimEndSec(), mic.playhead));
+function micPointerDown(e) {
+  const track = micLaneAt(e);
+  if (!track) return;
+  if (mic.playing) micStopPlay();
+  if (mic.recording) micFinishRecord();
+  const sr = mic.sampleRate;
+  const t = micTimeAtLane(track, e.clientX);
+  const clip = mic.tracks[track].find((c) => t >= c.start && t <= MicModel.clipEnd(c, sr));
+  const mini = $('#mic-mini');
+  try { mini.setPointerCapture(e.pointerId); } catch (_) {}
+  if (!clip) {
+    mic.activeTrack = track;
+    mic.selectedId = null;
+    mic.playhead = t;
+    mic.drag = { type: 'scrub', pointerId: e.pointerId };
+  } else {
+    const edge = Math.max(MIN_LEN, micSpan() * 0.012);
+    mic.activeTrack = track;
+    mic.selectedId = clip.id;
+    if (t - clip.start <= edge) mic.drag = { type: 'trim-l', id: clip.id, pointerId: e.pointerId };
+    else if (MicModel.clipEnd(clip, sr) - t <= edge) mic.drag = { type: 'trim-r', id: clip.id, pointerId: e.pointerId };
+    else mic.drag = { type: 'move', id: clip.id, grab: t - clip.start, pointerId: e.pointerId };
+  }
+  micUpdateUI();
+  micDraw();
+  e.preventDefault();
+}
+
+function micPointerMove(e) {
+  if (!mic.drag) return;
+  const sr = mic.sampleRate;
+  const track = micTrackOf(mic.drag.id) || mic.activeTrack;
+  const t = micTimeAtLane(track, e.clientX);
+  if (mic.drag.type === 'scrub') {
+    mic.playhead = t;
+  } else {
+    const c = micClipById(mic.drag.id);
+    if (!c) return;
+    let next = c;
+    if (mic.drag.type === 'move') next = MicModel.moveClip(c, Math.max(0, t - mic.drag.grab));
+    else if (mic.drag.type === 'trim-l') next = MicModel.trimClip(c, 'left', t, sr, MIN_LEN);
+    else if (mic.drag.type === 'trim-r') next = MicModel.trimClip(c, 'right', t, sr, MIN_LEN);
+    mic.tracks[track] = mic.tracks[track].map((x) => (x.id === c.id ? next : x)).sort((a, b) => a.start - b.start);
+    mic.saved = false;
+  }
+  micUpdateUI();
+  micDraw();
+}
+function micPointerUp() { mic.drag = null; }
+
+function micSplit() {
+  const c = micClipById(mic.selectedId);
+  if (!c) return;
+  const sr = mic.sampleRate;
+  const track = micTrackOf(c.id);
+  const parts = MicModel.splitClip(c, mic.playhead, sr, micNewId);
+  if (parts.length < 2) { toast('Move the playhead inside the selected take', { danger: true }); return; }
+  mic.tracks[track] = mic.tracks[track].filter((x) => x.id !== c.id).concat(parts).sort((a, b) => a.start - b.start);
+  mic.selectedId = parts[1].id;
+  mic.saved = false;
+  micUpdateUI();
+  micDraw();
+}
+
+function micDelete() {
+  const c = micClipById(mic.selectedId);
+  if (!c) return;
+  const track = micTrackOf(c.id);
+  mic.tracks[track] = mic.tracks[track].filter((x) => x.id !== c.id);
+  mic.selectedId = null;
+  mic.saved = false;
+  micUpdateUI();
+  micDraw();
 }
 
 function micOpen() {
@@ -3703,13 +3903,14 @@ function micOpen() {
   micUpdateUI();
   micDraw();
   micLoop();
-  setStatus('Mic recorder — press Record and speak');
+  setStatus('Mic recorder — Record punches into the active track');
 }
 
 function micClose(force) {
   if (mic.recording) micStopCapture();
-  if (mic.playing) micPauseTake();
-  if (!force && mic.length > 0 && !mic.saved) {
+  mic.recChunks = null;
+  if (mic.playing) micStopPlay();
+  if (!force && !mic.saved && (mic.tracks.main.length || mic.tracks.alt.length)) {
     if (!confirm('Discard this mic take?')) return;
   }
   if (mic.raf) { cancelAnimationFrame(mic.raf); mic.raf = 0; }
@@ -3722,14 +3923,11 @@ function micClose(force) {
 }
 
 async function micSaveTake() {
-  if (mic.recording) micStopCapture();
-  if (mic.playing) micPauseTake();
-  if (!mic.length || mic.trimEnd <= mic.trimStart) {
-    toast('Record something first', { danger: true });
-    return;
-  }
+  if (mic.recording) micFinishRecord();
+  if (mic.playing) micStopPlay();
+  const pcm = MicModel.mixClips(micClips(), mic.sampleRate);
+  if (!pcm.length) { toast('Record something first', { danger: true }); return; }
   const name = ($('#mic-name').value || '').trim() || MicWav.stampName(new Date());
-  const pcm = MicWav.trimSamples(mic.samples, mic.trimStart, mic.trimEnd);
   const data = MicWav.encodeWav(pcm, mic.sampleRate);
   let res;
   try { res = await api.micSave({ name, data }); }
@@ -3749,39 +3947,16 @@ function wireMicEvents() {
   $('#mic-record').addEventListener('click', micToggleRecord);
   $('#mic-play').addEventListener('click', micTogglePlay);
   $('#mic-stop').addEventListener('click', micStopTake);
+  $('#mic-split').addEventListener('click', micSplit);
+  $('#mic-del').addEventListener('click', micDelete);
   $('#mic-cancel').addEventListener('click', () => micClose(false));
   $('#mic-save').addEventListener('click', micSaveTake);
-  $('#mic-mini').addEventListener('pointerdown', (e) => {
-    const handle = e.target.closest('.mic-trim-handle');
-    if (handle) {
-      mic.trimDrag = handle.classList.contains('l') ? 'l' : 'r';
-      if (mic.playing) micPauseTake();
-      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-      e.preventDefault();
-      return;
-    }
-    if (mic.playing) micPauseTake();
-    mic.playhead = micMiniTimeAt(e.clientX) / mic.sampleRate;
-    micClampPlayhead();
-    micUpdateUI();
-    micDraw();
-  });
-  $('#mic-mini').addEventListener('pointermove', (e) => {
-    if (!mic.trimDrag) return;
-    const at = micMiniTimeAt(e.clientX);
-    const min = Math.round(MIN_LEN * mic.sampleRate);
-    if (mic.trimDrag === 'l') mic.trimStart = Math.max(0, Math.min(mic.trimEnd - min, at));
-    else mic.trimEnd = Math.min(mic.length, Math.max(mic.trimStart + min, at));
-    mic.saved = false;
-    micClampPlayhead();
-    micUpdateUI();
-    micDraw();
-  });
-  const endTrim = () => { mic.trimDrag = null; };
-  $('#mic-mini').addEventListener('pointerup', endTrim);
-  $('#mic-mini').addEventListener('pointercancel', endTrim);
+  const mini = $('#mic-mini');
+  mini.addEventListener('pointerdown', micPointerDown);
+  mini.addEventListener('pointermove', micPointerMove);
+  mini.addEventListener('pointerup', micPointerUp);
+  mini.addEventListener('pointercancel', micPointerUp);
 }
-
 
 /* ---------------- viewer: program output vs single-clip media preview ----------------
    'program' shows the edited timeline (no native transport — the timeline owns the
@@ -3879,6 +4054,7 @@ let tailMode = false;
 function stopMonitor() { if (monitorTimer) { clearInterval(monitorTimer); monitorTimer = null; } tailMode = false; }
 function startMonitor(tail) {
   stopMonitor();
+  stopStillPlayback();
   tailMode = !!tail;
   if (tail) { try { $('#preview').pause(); } catch (_) {} } // hold the last video frame
   let last = performance.now();
@@ -4024,8 +4200,11 @@ function freezeTargetAt(t) {
 }
 
 function updateFreezeButton() {
-  const b = $('#btn-freeze');
-  if (b) b.disabled = !freezeTargetAt(state.playhead);
+  const b = $('#effect-freeze');
+  if (!b) return;
+  const ok = !!freezeTargetAt(state.playhead);
+  b.classList.toggle('disabled', !ok);
+  b.setAttribute('aria-disabled', ok ? 'false' : 'true');
 }
 
 function insertFreeze() {
@@ -4338,7 +4517,6 @@ function wireHotkeys() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     if (k === 'Delete') { e.preventDefault(); if (!e.repeat) deleteSelection(); return; }
-    if (k === 'r' || k === 'R') { e.preventDefault(); if (!e.repeat) insertFreeze(); return; }
     if (k === 's' || k === 'S') { e.preventDefault(); if (!e.repeat) splitAtPlayhead(); return; }
     if (k === 'a' || k === 'A') { e.preventDefault(); if (!e.repeat) jumpToCut(-1); return; }
     if (k === 'd' || k === 'D') { e.preventDefault(); if (!e.repeat) jumpToCut(1); return; }
@@ -5157,8 +5335,6 @@ function wireEvents() {
   $('#btn-export').addEventListener('click', doExport);
   $('#btn-export-cancel').addEventListener('click', () => { api.cancelExport(); setStatus('Cancelling export…'); });
   $('#btn-help').addEventListener('click', () => $('#help-modal').classList.remove('hidden'));
-  const freezeBtn = $('#btn-freeze');
-  if (freezeBtn) freezeBtn.addEventListener('click', insertFreeze);
   $('#help-close').addEventListener('click', () => $('#help-modal').classList.add('hidden'));
   $('#btn-history').addEventListener('click', () => { renderHistory(); $('#history-modal').classList.remove('hidden'); });
   $('#history-close').addEventListener('click', () => $('#history-modal').classList.add('hidden'));
@@ -5529,6 +5705,11 @@ function wireEvents() {
     }
     const nextSeg = seq[idx + 1];
     const next = nextSeg.item;
+    if (TimelineOps.isStill(next)) {
+      try { el.pause(); } catch (_) {}
+      await beginStillSegment(nextSeg, idx + 1, nextSeg.start);
+      return;
+    }
     const segSrcEnd = seg.srcEnd;
     // SAME FILE + pieces essentially meet (exact split, or a couple of frames
     // apart from a keyframe-snapped trim) → keep playing, just move the
@@ -5592,6 +5773,7 @@ function wireEvents() {
     if (idx < 0 || idx >= seq.length) return;
     const seg = seq[idx];
     const item = seg.item;
+    if (TimelineOps.isStill(item)) return;
     const speed = speedOf(item);
     if (el.currentTime >= seg.srcEnd - 0.03) {
       handleBoundary(el, idx);

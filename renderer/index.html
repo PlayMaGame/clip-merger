@@ -59,7 +59,7 @@
     </div>
     <div class="spacer"></div>
     <div class="export-group">
-      <button id="btn-mic" class="btn ghost icon" title="Record a mic take into the Sounds bin"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg>Mic</button>
+      <button id="btn-mic" class="btn danger icon" title="Record a mic take into the Sounds bin"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg>Mic</button>
       <div class="btn-group" role="group" aria-label="App">
         <button id="btn-settings" class="btn ghost">Settings</button>
         <button id="btn-help" class="btn ghost" title="Help & shortcuts">Help</button>
@@ -160,7 +160,6 @@
           <div class="tl-group" data-tools="basic">
             <button id="btn-play" class="btn accent icon" title="Play / pause" aria-label="Play"><svg class="icon" aria-hidden="true"><use id="use-play" href="#i-play"/></svg></button>
             <button id="btn-split" class="btn" title="Split clip at the marker (playhead)"><svg class="icon" aria-hidden="true"><use href="#i-split"/></svg>Split</button>
-            <button id="btn-freeze" class="btn" title="Insert a 3s freeze frame at the playhead (R)" disabled><svg class="icon" aria-hidden="true"><use href="#i-freeze"/></svg>Freeze</button>
             <button id="btn-del" class="btn danger" title="Remove selected"><svg class="icon" aria-hidden="true"><use href="#i-delete"/></svg>Delete</button>
             <button id="btn-mark" class="btn" title="Add a marker at the marker position"><svg class="icon" aria-hidden="true"><use href="#i-marker"/></svg>Marker</button>
           </div>
@@ -301,19 +300,20 @@
       </label>
       <div class="mic-toolbar">
         <button id="mic-record" class="btn danger" title="Record from the playhead (overwrites what is under it)"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span id="mic-record-label">Record</span></button>
-        <button id="mic-play" class="btn accent" title="Play / pause the take"><svg class="icon" aria-hidden="true"><use id="mic-use-play" href="#i-play"/></svg><span id="mic-play-label">Play</span></button>
+        <button id="mic-play" class="btn accent" title="Play / pause both tracks"><svg class="icon" aria-hidden="true"><use id="mic-use-play" href="#i-play"/></svg><span id="mic-play-label">Play</span></button>
         <button id="mic-stop" class="btn ghost" title="Stop recording or playback">Stop</button>
-        <span id="mic-rec-dot" class="mic-rec hidden">REC</span>
+        <button id="mic-split" class="btn ghost" title="Split the selected take at the playhead"><svg class="icon" aria-hidden="true"><use href="#i-split"/></svg>Split</button>
+        <button id="mic-del" class="btn danger" title="Delete the selected take"><svg class="icon" aria-hidden="true"><use href="#i-delete"/></svg>Delete</button>
+        <span id="mic-rec-dot" class="mic-rec hidden" aria-hidden="true"></span>
         <span class="spacer"></span>
         <span id="mic-time" class="muted">0.000 / 0.000</span>
       </div>
       <div id="mic-mini" class="mic-mini">
-        <canvas id="mic-wave"></canvas>
-        <div id="mic-trim-l" class="mic-trim-handle l" title="Trim the start"></div>
-        <div id="mic-trim-r" class="mic-trim-handle r" title="Trim the end"></div>
+        <div class="mic-lane" data-track="main"><span class="mic-lane-label">MAIN</span><canvas id="mic-wave-main"></canvas></div>
+        <div class="mic-lane alt" data-track="alt"><span class="mic-lane-label">ALT</span><canvas id="mic-wave-alt"></canvas></div>
         <div id="mic-playhead" class="mic-playhead"></div>
       </div>
-      <p class="muted mic-hint">Click the take to move the playhead. Drag either end handle to trim. Recording starts at the playhead and overwrites what is under it, so you can punch in and extend the take.</p>
+      <p class="muted mic-hint">Record punches into the active track at the playhead. Drag a take to move it, drag its edges to trim, then Split / Delete to shape it. Save mixes both tracks into one WAV.</p>
       <div class="modal-actions">
         <button id="mic-cancel" class="btn ghost">Cancel</button>
         <button id="mic-save" class="btn accent">Save WAV</button>
@@ -395,12 +395,12 @@
       <div class="help-body">
         <p><b>Add media</b> — click a bin tile to preview it, <b>double-click</b> to append to the timeline, or <b>drag</b> it onto a lane to place it. Drag a Media/Transitions tile onto the <b>MAIN</b> lane (or the <b>ALT</b> lane for an alternate run); drag a Sound onto the <b>SOUND</b> lane. Images drop on MAIN/ALT as 3-second stills. Right-click a bin item to favorite it (1–5 stars) or reveal it in Explorer.</p>
         <p><b>Mic</b> — click the header <b>Mic</b> button, record, trim the take on the mini timeline, then save it into Sounds → <b>Mic Record</b>. Takes are not auto-added; drag the WAV onto a lane.</p>
-        <p><b>Freeze</b> — put the playhead over a video clip and press <b>Freeze</b> (or <b>R</b>). Mid-clip freezes split the clip and ripple every lane right by 3 seconds.</p>
+        <p><b>Freeze</b> — put the playhead over a video clip and click <b>Freeze</b> in the Effects bin. Mid-clip freezes split the clip and ripple every lane right by 3 seconds.</p>
         <p><b>Edit cuts</b> — click to select (Ctrl/Cmd+click for many) • drag to move (drag left of <b>0:00</b> into the pre-roll) • drag the edges to trim (snap to keyframes keeps cuts lossless) • click a gap then <b>Del</b> to close it • the MAIN-label button removes all gaps.</p>
         <p><b>Cut tools</b> — with clip(s) selected set <b>Frame</b> (Fill &amp; crop / Whole frame + blur bg), <b>Vol</b> (dB) and <b>Speed</b> in the timeline toolbar. The tiny top strip on a cut shows what was changed.</p>
         <table class="help-keys">
           <tr><td><b>S</b></td><td>split at the marker</td></tr>
-          <tr><td><b>R</b></td><td>freeze the video clip under the playhead</td></tr>
+          <tr><td><b>Freeze</b></td><td>Effects bin → insert a 3s freeze at the playhead</td></tr>
           <tr><td><b>Del</b></td><td>delete selection</td></tr>
           <tr><td><b>← / →</b></td><td>jump to previous / next cut</td></tr>
           <tr><td><b>A / D</b></td><td>jump to previous / next cut</td></tr>
@@ -461,6 +461,7 @@
 
   <script src="timeline-ops.js"></script>
   <script src="mic-wav.js"></script>
+  <script src="mic-model.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

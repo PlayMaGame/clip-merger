@@ -3,6 +3,24 @@
 All notable changes to Clip Merger are documented here.
 Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 
+## [0.9.1] - 2026-10-20
+
+### Fixed
+- **Images and freeze frames play back correctly.** Stills now advance the playhead
+  across their span and hand off to the next clip (video, image or freeze) instead of
+  freezing on screen — this also fixes the Play button appearing stuck when playback
+  started on a still or reached one mid-timeline.
+- **The Freeze action moved into the Effects bin.** It is now a **Freeze** tile you
+  click to insert a 3-second still at the playhead; the temporary **R** shortcut was
+  removed.
+- Stale selection ids can no longer crash the toolbar edge lookup.
+
+### Changed
+- **Mic recorder is now a two-track editor (MAIN / ALT).** Record punches into the
+  active track at the playhead; drag takes to move them, drag their edges to trim,
+  split and delete them, then Save mixes both tracks into one WAV. The toolbar **Mic**
+  button is red and the record button shows a round red record dot.
+
 ## [0.9.0] - 2026-10-19
 
 ### Added

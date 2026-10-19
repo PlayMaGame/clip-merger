@@ -27,17 +27,18 @@ already matches the export size/FPS).
   sound lane (movable/trimmable/deletable); real **waveform** drawn on every sound;
   **beat markers** auto-detected from a sound's transients so you can snap clips to
   music beats, explosions, shots, etc.
-- **Mic recorder**: record the default microphone from the header, watch the live
-  waveform, punch in from the mini-timeline playhead, trim both ends, and save a
-  48 kHz mono WAV into Sounds → **Mic Record**. Takes are not auto-added; drag one onto
+- **Mic recorder**: the red **Mic** button opens a two-track (MAIN/ALT) recorder. Record
+  punches into the active track at the playhead; drag takes to move them, drag their
+  edges to trim, Split/Delete to shape them, then Save mixes both tracks into one
+  48 kHz mono WAV under Sounds → **Mic Record**. Takes are not auto-added; drag one onto
   the timeline when you want it.
 - **Favorites**: right-click any bin item (including effects) to rate it 1–5 stars, clear
   the rating, or reveal it in Explorer. Favorites sort above unstarred items and persist
   per path in the app's user data folder.
-- **Freeze frame**: with the playhead over a video clip, **Freeze** (or **R**) splits the
-  clip if needed and inserts a 3-second hold, then ripples every lane and marker right.
-  Freezes trim like clips, accept camera effects, and exports regenerate the frame from
-  the source at that timestamp — no extra file is saved.
+- **Freeze frame**: with the playhead over a video clip, click **Freeze** in the Effects
+  bin. It splits the clip if needed and inserts a 3-second hold, then ripples every lane
+  and marker right. Freezes trim like clips, accept camera effects, and exports
+  regenerate the frame from the source at that timestamp — no extra file is saved.
 - **Custom timeline scrollbar** (drag the thumb / click the track) and a **✋ hand tool**
   to pan the timeline like a touchpad (middle-drag always pans; wheel works too).
 - **Export**: merges clips in timeline order and preserves gaps as black video with
@@ -78,11 +79,12 @@ npm start
    and press **✂ Split**. Select a clip and use **Mute** / **Detach audio** as needed.
 5. **◆ Marker** to add markers; select a sound and **♫ Detect beats** to wing beats onto
    the timeline, then snap clips onto them.
-6. Click **Mic** to record a take; trim it in the recorder and save it to Sounds →
-   **Mic Record**. Drag the WAV onto the timeline when you need it.
-7. Put the playhead over a video clip and press **Freeze** (**R**) to hold a frame for
-   3 seconds and ripple the edit. Images dropped on MAIN/ALT start at 3 seconds and can
-   be trimmed longer.
+6. Click **Mic** to record. The recorder has two tracks (MAIN/ALT): record, drag takes to
+   move, drag edges to trim, Split/Delete, then Save to Sounds → **Mic Record**. Drag the
+   WAV onto the timeline when you need it.
+7. Put the playhead over a video clip and click **Freeze** in the Effects bin to hold a
+   frame for 3 seconds and ripple the edit. Images dropped on MAIN/ALT start at 3 seconds
+   and can be trimmed longer.
 8. Right-click any bin item to rate it (favorites sort to the top) or reveal it.
 9. Choose an output path and **Export**.
 
