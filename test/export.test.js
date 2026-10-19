@@ -120,8 +120,8 @@ test('blur graph is size-agnostic: fg letterboxes (decrease), bg always covers (
     normalize: false, mute: false, speed: 1, fit: 'blur',
   });
   const graph = a[a.indexOf('-filter_complex') + 1];
-  assert.match(graph, /\[fg\]scale=1080:1920:force_original_aspect_ratio=decrease/);
-  assert.match(graph, /\[bg\]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920/);
+  assert.match(graph, /\[fg\]scale=1080:1920:force_original_aspect_ratio=decrease(:force_divisible_by=2)?/);
+  assert.match(graph, /\[bg\]scale=1080:1920:force_original_aspect_ratio=increase(:force_divisible_by=2)?,crop=1080:1920/);
   assert.match(graph, /overlay=\(W-w\)\/2:\(H-h\)\/2/);
 });
 
@@ -399,4 +399,19 @@ test('buildRenderPlan: positive starts are untouched', () => {
   assert.equal(visSpans[0].outDur, 5);
   assert.equal(visSpans[0].srcTrim, 0);
   assert.equal(cursor, 8);
+});
+
+test('cutArgs still mode loops one image and adds silent audio', () => {
+  const args = cutArgs('still.png', 0, 3, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: ['-preset', 'medium'],
+    W: 1080, H: 1920, FPS: 60, normalize: false, mute: true,
+    speed: 1, fit: 'cover', still: true,
+  });
+  assert.ok(args.includes('-loop'));
+  assert.equal(args[args.indexOf('-loop') + 1], '1');
+  assert.ok(args.includes('-framerate'));
+  assert.equal(args[args.indexOf('-framerate') + 1], '60');
+  assert.ok(!args.includes('-ss'));
+  assert.ok(args.includes('anullsrc=r=48000:cl=stereo'));
+  assert.equal(args.filter((x) => x === '-i').length, 2);
 });

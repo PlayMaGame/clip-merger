@@ -10,9 +10,10 @@ already matches the export size/FPS).
 ## Features
 
 - **3 media bins** (across the top, resizable, collapsible, thumbnail grids with own scrollbars):
-  **Media** (video clips), **Transitions**, **Sounds** (incl. music). Each points at a
+  **Media** (videos and images), **Transitions**, **Sounds** (incl. music). Each points at a
   folder (set with 📁 or in Settings); folders are watched, so files added in Explorer
-  appear automatically.
+  appear automatically. An `IMAGES` subfolder is pinned to the top of Media, and any
+  PNG/JPG/JPEG/WebP/GIF/BMP file can be dropped on MAIN or ALT as a 3-second still.
 - **Timeline** (bottom, full-width, height-resizable): drag clips from the bins onto it,
   click-drag to **move**, drag edges to **trim** (yellow snap guide), **✂ Split** cuts
   exactly at the orange marker.
@@ -26,6 +27,17 @@ already matches the export size/FPS).
   sound lane (movable/trimmable/deletable); real **waveform** drawn on every sound;
   **beat markers** auto-detected from a sound's transients so you can snap clips to
   music beats, explosions, shots, etc.
+- **Mic recorder**: record the default microphone from the header, watch the live
+  waveform, punch in from the mini-timeline playhead, trim both ends, and save a
+  48 kHz mono WAV into Sounds → **Mic Record**. Takes are not auto-added; drag one onto
+  the timeline when you want it.
+- **Favorites**: right-click any bin item (including effects) to rate it 1–5 stars, clear
+  the rating, or reveal it in Explorer. Favorites sort above unstarred items and persist
+  per path in the app's user data folder.
+- **Freeze frame**: with the playhead over a video clip, **Freeze** (or **R**) splits the
+  clip if needed and inserts a 3-second hold, then ripples every lane and marker right.
+  Freezes trim like clips, accept camera effects, and exports regenerate the frame from
+  the source at that timestamp — no extra file is saved.
 - **Custom timeline scrollbar** (drag the thumb / click the track) and a **✋ hand tool**
   to pan the timeline like a touchpad (middle-drag always pans; wheel works too).
 - **Export**: merges clips in timeline order and preserves gaps as black video with
@@ -33,7 +45,7 @@ already matches the export size/FPS).
   cuts are stream-copied when the source already matches the output size/FPS; other
   cuts are re-encoded with an auto-detected encoder (AMD AMF / NVIDIA NVENC / CPU
   libx264).
-- **Save/Open projects** (JSON v6; older projects are normalized on load).
+- **Save/Open projects** (JSON v7; older projects are normalized on load).
 - **Settings persist**: your ffmpeg/ffprobe paths, the three bin folders, output folder,
   encoder, size/FPS and normalize flag are remembered between launches.
 
@@ -66,15 +78,24 @@ npm start
    and press **✂ Split**. Select a clip and use **Mute** / **Detach audio** as needed.
 5. **◆ Marker** to add markers; select a sound and **♫ Detect beats** to wing beats onto
    the timeline, then snap clips onto them.
-6. Choose an output path and **Export**.
+6. Click **Mic** to record a take; trim it in the recorder and save it to Sounds →
+   **Mic Record**. Drag the WAV onto the timeline when you need it.
+7. Put the playhead over a video clip and press **Freeze** (**R**) to hold a frame for
+   3 seconds and ripple the edit. Images dropped on MAIN/ALT start at 3 seconds and can
+   be trimmed longer.
+8. Right-click any bin item to rate it (favorites sort to the top) or reveal it.
+9. Choose an output path and **Export**.
 
 ## Project layout
 
 ```
 package.json          npm/Electron metadata (npm start)
 electron/
-  main.js             window + IPC (scan bins, thumbnails, waveform, export, save/load)
+  main.js             window + IPC (scan bins, thumbnails, waveform, mic, export, save/load)
   preload.js          safe bridge exposed to the UI (window.api)
+  image-meta.js       still-image metadata (default duration / no audio)
+  library.js          favorites store (normalized path keys)
+  mic-save.js         mic filename/path helpers
   ffmpeg/
     encoders.js       encoder detection + process runners
     probe.js          ffprobe metadata + keyframes
@@ -82,6 +103,8 @@ electron/
 renderer/
   index.html          layout (bins / viewer / timeline)
   styles.css          dark theme, timeline, bins, editor
+  timeline-ops.js     pure timeline/effect math (unit tested)
+  mic-wav.js          PCM16 WAV encoder / trim helpers
   app.js              all UI logic
 merge.bat             your older one-shot batch merge script (kept, not used by the app)
 ```
@@ -115,6 +138,10 @@ merge.bat             your older one-shot batch merge script (kept, not used by 
   matches the editor, and sounds are mixed at their timeline positions.
 - Two video lanes: MAIN and ALT. A MAIN clip wins wherever the lanes overlap; clips on
   the same lane may not overlap (the editor blocks export until they are resolved).
+- Still images and freezes hold a single frame; they are always re-encoded on export so
+  they can be looped to any trimmed duration.
+- Mic recording uses the current Windows default input device. To use another microphone,
+  change the system default input before opening the recorder.
 - Clips parked in the editing pre-roll (before 0:00) are trimmed to the 0:00 boundary
   on export.
 - No built-in frame thumbnails on timeline clips (bins show real frame previews).

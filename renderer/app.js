@@ -13,7 +13,7 @@ const TIME_WARN = 60;   // from here: pale orange
 const TIME_DANGER = 120; // from here: pale red
 
 const BIN_KEYS = ['media', 'transitions', 'sounds'];
-const BIN_MODE = { media: 'video', transitions: 'video', sounds: 'audio' };
+const BIN_MODE = { media: 'media', transitions: 'video', sounds: 'audio' };
 
 // Built-in camera effects (the Effects panel; drag onto a MAIN/ALT lane).
 const EFFECT_DEFS = [
@@ -22,6 +22,9 @@ const EFFECT_DEFS = [
   { defId: 'shake', name: 'Shake', type: 'shake', amp: 0.04, freq: 20, decay: true, axes: 'both' },
 ];
 const EFFECT_DUR_DEFAULT = 3; // seconds a freshly dropped effect spans
+const STILL_DEFAULT = 3;     // seconds an image/freeze starts at; can be trimmed longer
+const STILL_MAX = 3600;      // virtual source ceiling for still trim handles
+const FREEZE_LEN = 3;        // seconds a freeze frame inserts
 
 const state = {
   timeline: [],   // [{ id, path, name, start, srcStart, srcEnd, duration, mute, ...meta }]
@@ -32,6 +35,7 @@ const state = {
   // from:{z,cx,cy}, to:{z,cx,cy}, ease, bg }. They overlay a video lane and warp
   // the visible output during their span.
   effects: [],
+  ratings: new Map(), // normalized path / effect:<id> -> 1..5 stars
   bins: {
     media: { root: '', cwd: '', crumbs: [], dirs: [], items: [], selected: new Set(), cache: new Map(), loading: false, epoch: 0 },
     transitions: { root: '', cwd: '', crumbs: [], dirs: [], items: [], selected: new Set(), cache: new Map(), loading: false, epoch: 0 },
@@ -53,6 +57,7 @@ const state = {
   encoders: [],
   mediaExt: [],
   audioExt: [],
+  imageExt: [],
   settings: {
     ffmpegPath: 'ffmpeg',
     ffprobePath: 'ffprobe',
@@ -224,7 +229,7 @@ function getOverlapIds() {
     if (dur(a) <= dur(b)) ids.add(a.id); else ids.add(b.id);
   };
   for (const [a, b] of TimelineOps.findOverlaps(state.timeline, (it) => it.start || 0, durOf)) markSmaller(a, b, durOf);
-  for (const [a, b] of TimelineOps.findOverlaps(state.hybrid.filter((h) => h.kind === 'clip'), (it) => it.start || 0, durOf)) markSmaller(a, b, durOf);
+  for (const [a, b] of TimelineOps.findOverlaps(state.hybrid.filter((h) => h.kind !== 'sound'), (it) => it.start || 0, durOf)) markSmaller(a, b, durOf);
   for (const [a, b] of TimelineOps.findOverlaps(state.hybrid.filter((h) => h.kind === 'sound'), hybStartOf, hybDurOf)) markSmaller(a, b, hybDurOf);
   for (const [a, b] of TimelineOps.findOverlaps(state.soundboard, (s) => s.startTime || 0, sndDur)) markSmaller(a, b, sndDur);
   return ids;
@@ -242,14 +247,14 @@ function arrangeTrack() {
   }
 }
 function sortHybridClips() {
-  const clips = state.hybrid.filter((h) => h.kind === 'clip');
+  const clips = state.hybrid.filter((h) => h.kind !== 'sound');
   clips.sort((a, b) => (a.start || 0) - (b.start || 0));
   const sounds = state.hybrid.filter((h) => h.kind === 'sound');
   sounds.sort((a, b) => hybStartOf(a) - hybStartOf(b));
   state.hybrid = [...sounds, ...clips];
 }
 function arrangeHybridClips() {
-  const clips = state.hybrid.filter((h) => h.kind === 'clip').sort((a, b) => (a.start || 0) - (b.start || 0));
+  const clips = state.hybrid.filter((h) => h.kind !== 'sound').sort((a, b) => (a.start || 0) - (b.start || 0));
   if (!clips.length) return;
   let prevEnd = (clips[0].start || 0) + durOf(clips[0]);
   for (let i = 1; i < clips.length; i++) {
@@ -264,7 +269,7 @@ function arrangeHybridClips() {
 function videoSegments() {
   return TimelineOps.visibleSegments(
     state.timeline,
-    state.hybrid.filter((h) => h.kind === 'clip'),
+    state.hybrid.filter((h) => h.kind !== 'sound'),
   );
 }
 
@@ -518,6 +523,7 @@ async function init() {
   state.encoders = info.encoders || [];
   state.mediaExt = info.mediaExt || [];
   state.audioExt = info.audioExt || [];
+  state.imageExt = info.imageExt || [];
   Object.assign(state.settings, info.defaults || {});
 
   // Restore last-used settings (paths, folders, output, encoder, …) over defaults.
@@ -535,6 +541,7 @@ async function init() {
   const enc = state.encoders.find((e) => e.id === state.settings.encoder);
   $('#encoder-label').textContent = enc ? `Encoder: ${enc.label}` : '';
 
+  await loadLibrary();
   renderAll();
   wireEvents();
   wireHotkeys();
@@ -690,6 +697,104 @@ function starsOf(name) {
   return m ? m[0].length : 0;
 }
 
+/* ---------------- favorites / shared context menu ---------------- */
+function libKey(value) {
+  return String(value == null ? '' : value)
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+function effectLibKey(defId) { return libKey('effect:' + defId); }
+function ratingOf(key) { return state.ratings.get(libKey(key)) || 0; }
+function ratingForItem(item) { return ratingOf(item.path); }
+
+async function loadLibrary() {
+  try {
+    const res = await api.libraryGet();
+    if (res && res.ok && res.ratings) state.ratings = new Map(Object.entries(res.ratings));
+  } catch (_) { /* ratings are optional */ }
+}
+
+async function setRating(key, stars) {
+  const k = libKey(key);
+  const prev = state.ratings.get(k) || 0;
+  if (stars > 0) state.ratings.set(k, stars);
+  else state.ratings.delete(k);
+  try {
+    const res = await api.librarySet({ key: k, stars });
+    if (!res || !res.ok) throw new Error((res && res.error) || 'rating save failed');
+    if (res.ratings) state.ratings = new Map(Object.entries(res.ratings));
+    return true;
+  } catch (err) {
+    if (prev > 0) state.ratings.set(k, prev);
+    else state.ratings.delete(k);
+    toast('Could not save favorite', { danger: true });
+    console.error('LIBRARY_SAVE_ERR', err);
+    return false;
+  }
+}
+
+function closeContextMenu() {
+  const el = $('#ctx-menu');
+  if (!el) return;
+  el.classList.add('hidden');
+  el.innerHTML = '';
+}
+
+function openContextMenu(opts) {
+  const el = $('#ctx-menu');
+  if (!el) return;
+  el.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'ctx-title';
+  head.textContent = opts.title || '';
+  el.appendChild(head);
+
+  const row = document.createElement('div');
+  row.className = 'ctx-stars';
+  for (let i = 1; i <= 5; i++) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctx-star' + (i <= (opts.rating || 0) ? ' on' : '');
+    b.textContent = '★';
+    b.title = `${i} star${i === 1 ? '' : 's'}`;
+    b.setAttribute('aria-label', b.title);
+    b.addEventListener('click', () => { closeContextMenu(); opts.onRate(i); });
+    row.appendChild(b);
+  }
+  el.appendChild(row);
+
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'ctx-item';
+  clear.textContent = 'Clear rating';
+  clear.disabled = !opts.rating;
+  clear.addEventListener('click', () => { closeContextMenu(); opts.onRate(0); });
+  el.appendChild(clear);
+
+  if (opts.onReveal) {
+    const sep = document.createElement('div');
+    sep.className = 'ctx-sep';
+    el.appendChild(sep);
+    const rev = document.createElement('button');
+    rev.type = 'button';
+    rev.className = 'ctx-item';
+    rev.textContent = 'Reveal in folder';
+    rev.addEventListener('click', () => { closeContextMenu(); opts.onReveal(); });
+    el.appendChild(rev);
+  }
+
+  el.classList.remove('hidden');
+  el.style.left = '0px';
+  el.style.top = '0px';
+  const r = el.getBoundingClientRect();
+  const x = Math.max(4, Math.min(opts.x || 0, window.innerWidth - r.width - 6));
+  const y = Math.max(4, Math.min(opts.y || 0, window.innerHeight - r.height - 6));
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+
 function paintBinSelection(key) {
   const bin = state.bins[key];
   const section = $(`.bin[data-bin="${key}"]`);
@@ -709,7 +814,15 @@ function renderBin(key) {
   if (binObservers[key]) { binObservers[key].disconnect(); binObservers[key] = null; }
   const root = bin.root || bin.dir || '';
   const crumbs = bin.crumbs || [];
-  const dirs = bin.dirs || [];
+  const dirs = (bin.dirs || []).slice();
+  if (key === 'media') {
+    // The user's IMAGES folder is their stills library — pin it to the top.
+    dirs.sort((a, b) => {
+      const ai = String(a.name).toUpperCase() === 'IMAGES' ? 0 : 1;
+      const bi = String(b.name).toUpperCase() === 'IMAGES' ? 0 : 1;
+      return ai - bi || String(a.name).localeCompare(String(b.name));
+    });
+  }
 
   // Breadcrumb trail
   if (crumbsEl) {
@@ -780,15 +893,21 @@ function renderBin(key) {
     return;
   }
 
-  // Starred clips first (most stars at the top); order otherwise preserved.
-  const items = bin.items.slice().sort((a, b) => starsOf(b.name) - starsOf(a.name));
+  // Favorites first (most stars at the top), then legacy !-prefixed names, then name.
+  const items = bin.items.slice().sort((a, b) => {
+    const dr = ratingForItem(b) - ratingForItem(a);
+    if (dr) return dr;
+    const ds = starsOf(b.name) - starsOf(a.name);
+    if (ds) return ds;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
   for (const item of items) renderBinCard(key, item, list);
 }
 
 function renderBinCard(key, item, list) {
   const bin = state.bins[key];
   const card = document.createElement('div');
-  card.className = 'base-item' + (BIN_MODE[key] !== 'video' ? ' sound' : '')
+  card.className = 'base-item' + (key === 'sounds' ? ' sound' : '')
     + (bin.selected.has(item.path) ? ' selected' : '');
   card.dataset.path = item.path;
   card.draggable = true;
@@ -799,7 +918,7 @@ function renderBinCard(key, item, list) {
     <div class="bdur">${fmt(item.duration || 0)}</div>`;
   $('.bname', meta).textContent = item.name;
   $('.bname', meta).title = item.name;
-  if (BIN_MODE[key] === 'video') {
+  if (key !== 'sounds') {
     const wrap = document.createElement('div');
     wrap.className = 'bthumb';
     const img = document.createElement('img');
@@ -807,10 +926,11 @@ function renderBinCard(key, item, list) {
     img.draggable = false; // the tile card is the drag source — not the thumb (file: URLs would native-drag the file)
     wrap.append(img);
     const n = starsOf(item.name);
-    if (n) {
+    const rating = ratingForItem(item);
+    if (rating || n) {
       const st = document.createElement('div');
       st.className = 'bstars';
-      st.textContent = '★'.repeat(Math.min(n, 5)); // cap so many ! can't overflow the small cards
+      st.textContent = '★'.repeat(rating || Math.min(n, 5)); // cap so many ! can't overflow the small cards
       wrap.append(st);
     }
     card.append(wrap, meta);
@@ -820,6 +940,13 @@ function renderBinCard(key, item, list) {
     const icon = document.createElement('span');
     icon.className = 'sound-ico';
     icon.textContent = '♪';
+    const rating = ratingForItem(item);
+    if (rating) {
+      const st = document.createElement('span');
+      st.className = 'bmeta-stars';
+      st.textContent = '★'.repeat(rating);
+      meta.appendChild(st);
+    }
     card.append(icon, meta);
   }
 
@@ -859,6 +986,20 @@ function renderBinCard(key, item, list) {
     buildDragCard(card, e, dragSet.length);
     binDragActive = true;
     pendingDrag = { kind: key, items: dragSet };
+  });
+  card.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    bin.selected = new Set([item.path]);
+    paintBinSelection(key);
+    openContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      title: item.name,
+      rating: ratingForItem(item),
+      onRate: async (n) => { await setRating(item.path, n); renderBin(key); },
+      onReveal: () => api.reveal(item.path),
+    });
   });
   list.appendChild(card);
 }
@@ -961,15 +1102,26 @@ async function loadThumb(item, img) {
 }
 
 /* ---------------- item factories ---------------- */
+function isImageItem(item) {
+  if (!item) return false;
+  if (item.image || item.kind === 'image') return true;
+  const m = /\.([a-z0-9]+)$/i.exec(item.path || item.name || '');
+  return !!(m && state.imageExt.includes(m[1].toLowerCase()));
+}
+
 function baseItemToTimeline(item) {
+  const image = isImageItem(item);
+  const duration = image ? STILL_DEFAULT : item.duration;
   return {
-    id: newId(), path: item.path, name: item.name, duration: item.duration,
-    start: 0, srcStart: 0, srcEnd: item.duration, mute: false, speed: 1,
+    id: newId(), path: item.path, name: item.name, duration,
+    start: 0, srcStart: 0, srcEnd: duration,
+    kind: image ? 'image' : 'video', still: image || undefined,
+    mute: image ? true : false, speed: 1,
     fit: 'blur', // whole frame + blurred background is the default framing
     volume: 0,   // per-clip audio gain in dB
     width: item.width, height: item.height, fps: item.fps, vcodec: item.vcodec,
-    acodec: item.acodec, audioSampleRate: item.audioSampleRate,
-    audioChannels: item.audioChannels, hasAudio: item.hasAudio,
+    acodec: image ? null : item.acodec, audioSampleRate: image ? 0 : item.audioSampleRate,
+    audioChannels: image ? 0 : item.audioChannels, hasAudio: image ? false : item.hasAudio,
   };
 }
 function baseSoundFromItem(item) {
@@ -999,7 +1151,7 @@ function baseSoundFromItem(item) {
 const hybStartOf = (h) => (h.kind === 'sound' ? (h.startTime || 0) : (h.start || 0));
 const hybDurOf = (h) => (h.kind === 'sound' ? sndDur(h) : durOf(h));
 function setHybStart(h, t) { if (h.kind === 'sound') h.startTime = t; else h.start = t; }
-function baseHybClip(item) { const c = baseItemToTimeline(item); c.kind = 'clip'; return c; }
+function baseHybClip(item) { const c = baseItemToTimeline(item); c.kind = c.kind === 'image' ? 'image' : 'clip'; return c; }
 function baseHybSound(item) { const s = baseSoundFromItem(item); s.kind = 'sound'; return s; }
 
 function addHybridItems(items, t) {
@@ -1302,8 +1454,10 @@ function renderVideoLane() {
   state.timeline.forEach((item) => {
     const start = item.start || 0;
     const dur = durOf(item);
+    const still = TimelineOps.isStill(item);
     const block = document.createElement('div');
     block.className = 'tclip'
+      + (still ? (item.kind === 'freeze' ? ' freeze' : ' image') : '')
       + (item.origin === 'transitions' ? ' transition' : '')
       + (state.selectedIds.has(item.id) ? ' selected' : '')
       + (overlapIds.has(item.id) ? ' overlap' : '')
@@ -1312,7 +1466,7 @@ function renderVideoLane() {
     block.style.width = Math.max(6, dur * state.pps) + 'px';
 
     block.appendChild(makeLabel({
-      iconId: item.origin === 'transitions' ? 'i-transition' : 'i-video',
+      iconId: item.kind === 'freeze' ? 'i-freeze' : (isImageItem(item) ? 'i-image' : (item.origin === 'transitions' ? 'i-transition' : 'i-video')),
       dur: fmt(dur),
     }));
     if (item.hasAudio && !drag) renderWaveform(block, item);
@@ -1328,18 +1482,20 @@ function renderVideoLane() {
       px: dur * state.pps,
     }));
 
-    const kfs = keyCache.get(item.path);
-    if (kfs) {
-      for (const k of kfs) {
-        if (k >= item.srcStart && k <= item.srcEnd) {
-          const mk = document.createElement('div');
-          mk.className = 'key';
-          mk.style.left = ((k - item.srcStart) * state.pps) + 'px';
-          block.appendChild(mk);
+    if (!still) {
+      const kfs = keyCache.get(item.path);
+      if (kfs) {
+        for (const k of kfs) {
+          if (k >= item.srcStart && k <= item.srcEnd) {
+            const mk = document.createElement('div');
+            mk.className = 'key';
+            mk.style.left = ((k - item.srcStart) * state.pps) + 'px';
+            block.appendChild(mk);
+          }
         }
+      } else {
+        getKeyframesAsync(item.path);
       }
-    } else {
-      getKeyframesAsync(item.path);
     }
 
     const el = document.createElement('div');
@@ -1375,7 +1531,9 @@ function renderHybridLane() {
   state.hybrid.forEach((h) => {
     const block = document.createElement('div');
     const kind = h.kind === 'sound' ? 'sound' : 'clip';
+    const still = TimelineOps.isStill(h);
     let cls = kind === 'sound' ? 'tsb' : 'tclip hyb';
+    if (still) cls += h.kind === 'freeze' ? ' freeze' : ' image';
     if (kind !== 'sound' && h.origin === 'transitions') cls += ' transition';
     if (state.selectedHyb.has(h.id)) cls += ' selected';
     if (overlapIds.has(h.id)) cls += ' overlap';
@@ -1385,7 +1543,7 @@ function renderHybridLane() {
 
     block.appendChild(makeLabel(kind === 'sound'
       ? { dur: fmt(hybDurOf(h)) }
-      : { iconId: h.origin === 'transitions' ? 'i-transition' : 'i-video', dur: fmt(hybDurOf(h)) }));
+      : { iconId: h.kind === 'freeze' ? 'i-freeze' : (isImageItem(h) ? 'i-image' : (h.origin === 'transitions' ? 'i-transition' : 'i-video')), dur: fmt(hybDurOf(h)) }));
 
     if (kind === 'sound') {
       renderWaveform(block, h);
@@ -1414,18 +1572,20 @@ function renderHybridLane() {
       er.addEventListener('pointerdown', (e) => { e.stopPropagation(); startHybTrimDrag(h, 'r', e); });
       block.appendChild(er);
 
-      const kfs = keyCache.get(h.path);
-      if (kfs) {
-        for (const k of kfs) {
-          if (k >= h.srcStart && k <= h.srcEnd) {
-            const mk = document.createElement('div');
-            mk.className = 'key';
-            mk.style.left = ((k - (h.srcStart || 0)) * state.pps) + 'px';
-            block.appendChild(mk);
+      if (!still) {
+        const kfs = keyCache.get(h.path);
+        if (kfs) {
+          for (const k of kfs) {
+            if (k >= h.srcStart && k <= h.srcEnd) {
+              const mk = document.createElement('div');
+              mk.className = 'key';
+              mk.style.left = ((k - (h.srcStart || 0)) * state.pps) + 'px';
+              block.appendChild(mk);
+            }
           }
+        } else {
+          getKeyframesAsync(h.path);
         }
-      } else {
-        getKeyframesAsync(h.path);
       }
     }
 
@@ -1484,7 +1644,7 @@ function renderClipGaps(body) {
 }
 
 function renderHybridGaps(body) {
-  const clips = state.hybrid.filter((h) => h.kind === 'clip').sort((a, b) => (a.start || 0) - (b.start || 0));
+  const clips = state.hybrid.filter((h) => h.kind !== 'sound').sort((a, b) => (a.start || 0) - (b.start || 0));
   if (!clips.length) return;
   const gaps = [];
   const firstStart = clips[0].start || 0;
@@ -1577,6 +1737,7 @@ function updateTimeReadout() {
   // without moving your eyes off the numbers.
   el.classList.toggle('warn', state.playhead >= TIME_WARN && state.playhead < TIME_DANGER);
   el.classList.toggle('danger', state.playhead >= TIME_DANGER);
+  updateFreezeButton();
 }
 
 /* ---------------- custom timeline scrollbar ---------------- */
@@ -1664,8 +1825,12 @@ function migrateItemToLane(item, fromLane, toLane) {
   if (i >= 0) from.splice(i, 1);
   const fromSel = laneSel(fromLane), toSel = laneSel(toLane);
   const wasSel = fromSel.delete(item.id);
-  if (toLane === 'hybrid') item.kind = TimelineOps.kindForLane(toLane, fromLane === 'sounds' ? 'sound' : 'clip');
-  else delete item.kind;
+  if (toLane === 'hybrid') {
+    item.kind = fromLane === 'sounds' ? 'sound'
+      : (item.kind === 'image' || item.kind === 'freeze' ? item.kind : 'clip');
+  } else if (item.kind !== 'image' && item.kind !== 'freeze') {
+    delete item.kind;
+  }
   to.push(item);
   if (wasSel) toSel.add(item.id);
 }
@@ -1876,7 +2041,8 @@ function onDragMove(e) {
       if (snap.guide != null) showGuide(snap.guide); else hideGuide();
     } else {
       let ne = drag.startSize + dt;
-      ne = Math.max(item.srcStart + MIN_LEN, Math.min(ne, item.duration));
+      const maxSrc = TimelineOps.isStill(item) ? STILL_MAX : item.duration;
+      ne = Math.max(item.srcStart + MIN_LEN, Math.min(ne, maxSrc));
       const snap = snapTrim(ne, item.id, kfs);
       item.srcEnd = snap.v;
       if (snap.guide != null) showGuide(snap.guide); else hideGuide();
@@ -1933,7 +2099,8 @@ function onDragMove(e) {
       if (snap.guide != null) showGuide(snap.guide); else hideGuide();
     } else {
       let ne = drag.startSize + dt;
-      ne = clamp(ne, (h.srcStart != null ? h.srcStart : 0) + MIN_LEN, h.duration);
+      const maxSrc = TimelineOps.isStill(h) ? STILL_MAX : h.duration;
+      ne = clamp(ne, (h.srcStart != null ? h.srcStart : 0) + MIN_LEN, maxSrc);
       const snap = snapTrim(ne, h.id, kfs);
       if (h.endTime != null) h.endTime = snap.v; else h.srcEnd = snap.v;
       if (snap.guide != null) showGuide(snap.guide); else hideGuide();
@@ -2071,7 +2238,7 @@ function soleSelectedEffect() {
 const effectEnd = (e) => (e.start || 0) + Math.max(0, e.dur || 0);
 
 // For Frame / Vol / Speed: clips from both the Clips and CLIPS2 lanes...
-function allSelClips() { return clipSelection().concat(hybSelection().filter((h) => h.kind === 'clip')); }
+function allSelClips() { return clipSelection().concat(hybSelection().filter((h) => h.kind !== 'sound')); }
 // ...sounds from the Sounds lane and the CLIPS2 lane.
 function allSelSounds() { return soundSelection().concat(hybSelection().filter((h) => h.kind === 'sound')); }
 
@@ -2249,7 +2416,7 @@ function soleSelectedHybClip() {
   if (state.selectedHyb.size !== 1) return null;
   const id = state.selectedHyb.values().next().value;
   const h = state.hybrid.find((x) => x.id === id);
-  return h && h.kind === 'clip' ? h : null;
+  return h && h.kind !== 'sound' ? h : null;
 }
 
 function soleSelectedClipAny() {
@@ -2260,7 +2427,7 @@ function updateToolbar() {
   const item = soleSelectedClipAny();
   $('#btn-detach').disabled = !item || !item.hasAudio;
   const sp = $('#btn-speed');
-  sp.disabled = !item;
+  sp.disabled = !item || TimelineOps.isStill(item);
   sp.value = item ? String(speedOf(item)) : '1';
   // Framing applies to the whole clip selection (Clips + CLIPS2 lanes).
   const sel = allSelClips();
@@ -2573,13 +2740,15 @@ function governingEffectAt(t) {
 // left — exactly the export overlay math) plus the pose HUD while editing.
 function updatePreviewZoomTransform() {
   const el = $('#preview');
+  const still = $('#preview-still');
   const cross = $('#zoom-cross');
   const hud = $('#zoom-hud');
   if (!el) return;
+  const targets = [el, still].filter(Boolean);
   const pose = cameraPoseAt(previewPoseTime());
   const isId = Math.abs(pose.z - 1) < 1e-6 && Math.abs(pose.cx - 0.5) < 1e-6 && Math.abs(pose.cy - 0.5) < 1e-6;
   if (isId) {
-    if (el.style.transform) { el.style.transform = ''; el.style.transformOrigin = ''; }
+    for (const n of targets) { if (n.style.transform) { n.style.transform = ''; n.style.transformOrigin = ''; } }
     if (cross) cross.classList.add('hidden');
     if (hud) hud.classList.add('hidden');
     return;
@@ -2589,8 +2758,10 @@ function updatePreviewZoomTransform() {
   const Wd = Math.max(1, r.width), Hd = Math.max(1, r.height);
   const tx = Wd / 2 - pose.cx * Wd * pose.z;
   const ty = Hd / 2 - pose.cy * Hd * pose.z;
-  el.style.transformOrigin = '0 0';
-  el.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) scale(${pose.z})`;
+  for (const n of targets) {
+    n.style.transformOrigin = '0 0';
+    n.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) scale(${pose.z})`;
+  }
   const editing = state.viewer.mode === 'program' && soleSelectedEffect();
   if (editing && cross && hud) {
     cross.classList.remove('hidden');
@@ -2760,14 +2931,25 @@ function renderEffectsBin() {
   list.innerHTML = '';
   const grid = document.createElement('div');
   grid.className = 'effects-grid';
-  for (const def of EFFECT_DEFS) {
+  const defs = EFFECT_DEFS.slice().sort((a, b) => {
+    const dr = ratingOf(effectLibKey(b.defId)) - ratingOf(effectLibKey(a.defId));
+    return dr || a.name.localeCompare(b.name);
+  });
+  for (const def of defs) {
     const card = document.createElement('div');
     card.className = 'effect-tile';
     card.draggable = true;
     card.title = `Drag onto a MAIN/ALT lane to add ${def.name}`;
     const ic = document.createElement('span'); ic.className = 'effect-tile-icon'; ic.textContent = '◎';
     const nm = document.createElement('span'); nm.className = 'effect-tile-name'; nm.textContent = def.name;
+    const rating = ratingOf(effectLibKey(def.defId));
     card.append(ic, nm);
+    if (rating) {
+      const st = document.createElement('span');
+      st.className = 'effect-tile-stars';
+      st.textContent = '★'.repeat(rating);
+      card.append(st);
+    }
     card.addEventListener('dragstart', (e) => {
       const payload = JSON.stringify({ kind: 'effects', items: [{ defId: def.defId, name: def.name, duration: EFFECT_DUR_DEFAULT }] });
       e.dataTransfer.setData('application/x-clipmerger', payload);
@@ -2779,6 +2961,17 @@ function renderEffectsBin() {
       pendingDrag = { kind: 'effects', items: [{ defId: def.defId, name: def.name, duration: EFFECT_DUR_DEFAULT }] };
     });
     card.addEventListener('dblclick', () => addEffect(def.defId, 'clips', state.playhead));
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        title: def.name,
+        rating: ratingOf(effectLibKey(def.defId)),
+        onRate: async (n) => { await setRating(effectLibKey(def.defId), n); renderEffectsBin(); },
+      });
+    });
     grid.appendChild(card);
   }
   list.appendChild(grid);
@@ -2793,10 +2986,44 @@ function syncActiveMute() {
   const idx = srcInfo.bIndex;
   const item = idx >= 0 && idx < seq.length ? seq[idx].item : null;
   if (!el) return;
-  el.muted = !!(item && item.mute);
   const fit = item ? (item.fit || 'blur') : 'blur';
   const program = $('#viewer-program');
   const bg = $('#preview-bg');
+  const stillImg = $('#preview-still');
+  const stillBg = $('#preview-bg-still');
+  const image = !!(item && isImageItem(item));
+  const camPose = cameraPoseAt(previewPoseTime());
+  const gov = governingEffectAt(previewPoseTime());
+  const camActive = gov && (Math.abs(camPose.z - 1) > 1e-6 || Math.abs(camPose.cx - 0.5) > 1e-6 || Math.abs(camPose.cy - 0.5) > 1e-6);
+
+  if (image) {
+    // A still has no video element to play. Show the centered image (plus a
+    // blurred fill copy when framing is "whole frame + blur bg").
+    const url = api.toFileUrl(item.path);
+    if (stillImg) {
+      if (stillImg.dataset.path !== url) { stillImg.dataset.path = url; stillImg.src = url; }
+      stillImg.classList.remove('hidden');
+      stillImg.style.objectFit = (camActive || fit === 'cover') ? 'cover' : 'contain';
+    }
+    if (stillBg) {
+      if (stillBg.dataset.path !== url) { stillBg.dataset.path = url; stillBg.src = url; }
+      stillBg.classList.toggle('hidden', !(fit === 'blur' || (gov && gov.bg === 'blur' && camPose.z < 1)));
+    }
+    el.classList.add('hidden');
+    try { el.pause(); } catch (_) {}
+    if (program) program.classList.remove('bg-on');
+    if (bg) { try { bg.pause(); } catch (_) {} bg.removeAttribute('src'); }
+    el.muted = true;
+    setMediaGain(el, -120);
+    setMediaGain($('#preview-b'), -120);
+    updatePreviewZoomTransform();
+    return;
+  }
+
+  if (stillImg) stillImg.classList.add('hidden');
+  if (stillBg) stillBg.classList.add('hidden');
+  el.classList.remove('hidden');
+  el.muted = !!(item && item.mute);
   if (fit === 'cover') {
     el.style.objectFit = 'cover';
     if (program) program.classList.remove('bg-on');
@@ -2816,9 +3043,6 @@ function syncActiveMute() {
   setMediaGain($('#preview-b'), -120);
   // Camera effect: force the "fill & crop" base so the preview frame equals the
   // export frame, and show the effect's background when the pose is below 100%.
-  const camPose = cameraPoseAt(previewPoseTime());
-  const gov = governingEffectAt(previewPoseTime());
-  const camActive = gov && (Math.abs(camPose.z - 1) > 1e-6 || Math.abs(camPose.cx - 0.5) > 1e-6 || Math.abs(camPose.cy - 0.5) > 1e-6);
   if (camActive) {
     el.style.objectFit = 'cover';
     if (program) {
@@ -2895,8 +3119,8 @@ function onProxyReady(path) {
 // the whole timeline scrubs smoothly, not just the clip currently in view.
 function warmPreviewProxies() {
   const seen = new Set();
-  for (const it of state.timeline) if (it && it.path && !seen.has(it.path)) { seen.add(it.path); requestPreviewProxy(it.path); }
-  for (const it of state.hybrid) if (it && it.kind === 'clip' && it.path && !seen.has(it.path)) { seen.add(it.path); requestPreviewProxy(it.path); }
+  for (const it of state.timeline) if (it && it.path && !TimelineOps.isStill(it) && !seen.has(it.path)) { seen.add(it.path); requestPreviewProxy(it.path); }
+  for (const it of state.hybrid) if (it && it.kind !== 'sound' && it.path && !TimelineOps.isStill(it) && !seen.has(it.path)) { seen.add(it.path); requestPreviewProxy(it.path); }
 }
 
 // Cache the loaded source by its FILE PATH (not the clip id): pieces cut from the
@@ -2931,7 +3155,7 @@ function prefetchStandby(nextIdx) {
   const seg = (state.playing && nextIdx != null && nextIdx >= 0 && nextIdx < seq.length)
     ? seq[nextIdx] : null;
   const target = seg ? seg.item : null;
-  if (!target || target.path === srcInfo.path) {
+  if (!target || target.path === srcInfo.path || TimelineOps.isStill(target)) {
     try { b.pause(); } catch (_) {}
     b.removeAttribute('src');
     srcB = { id: null, path: null, bIndex: -1, ready: false };
@@ -2987,6 +3211,20 @@ function clearStandby() {
   const program = $('#viewer-program');
   if (program) program.classList.remove('bg-on');
   srcB = { id: null, path: null, bIndex: -1, ready: false };
+  clearStillPreview();
+}
+
+// Hide the still overlay(s) and let the video element show again.
+function clearStillPreview() {
+  for (const id of ['#preview-still', '#preview-bg-still']) {
+    const el = $(id);
+    if (!el) continue;
+    el.classList.add('hidden');
+    el.removeAttribute('src');
+    el.dataset.path = '';
+  }
+  const v = $('#preview');
+  if (v) v.classList.remove('hidden');
 }
 
 // ---- Preview seek queue ---------------------------------------------------
@@ -3069,6 +3307,23 @@ async function seekPreview(t) {
   if (state.playing) syncSoundPreview(true); // re-sync sounds after a seek during playback
   const bk = visibleVideoAt(t);
   if (!bk) return;
+  if (isImageItem(bk.item)) {
+    srcInfo = { id: bk.item.id, path: bk.item.path, bIndex: bk.index, ready: true };
+    syncActiveMute();
+    return;
+  }
+  if (bk.item.kind === 'freeze') {
+    const seqNo = ++seekSeq;
+    try { await ensureLoaded(bk.item, bk.index); } catch (_) { return; }
+    if (seqNo !== seekSeq) return;
+    const fv = $('#preview');
+    if (!fv) return;
+    try { fv.pause(); } catch (_) {}
+    fv.playbackRate = 1;
+    try { fv.currentTime = bk.item.freezeAt || 0; } catch (_) {}
+    syncActiveMute();
+    return;
+  }
   const seq = ++seekSeq;
   try {
     await ensureLoaded(bk.item, bk.index);
@@ -3113,6 +3368,27 @@ async function togglePlay() {
     startMonitor(true);
     return;
   }
+  if (isImageItem(b.item)) {
+    // A still holds the frame while the clock advances (and sounds stay in sync).
+    srcInfo = { id: b.item.id, path: b.item.path, bIndex: b.index, ready: true };
+    syncSoundPreview(true);
+    syncActiveMute();
+    startMonitor(true);
+    startZoomLoop();
+    return;
+  }
+  if (b.item.kind === 'freeze') {
+    await ensureLoaded(b.item, b.index);
+    cancelPreviewSeek();
+    v.pause();
+    v.playbackRate = 1;
+    try { v.currentTime = b.item.freezeAt || 0; } catch (_) {}
+    syncSoundPreview(true);
+    syncActiveMute();
+    startMonitor(true);
+    startZoomLoop();
+    return;
+  }
   syncSoundPreview(true); // start the sound lane immediately with the video
   await ensureLoaded(b.item, b.index);
   cancelPreviewSeek(); // a queued scrub jump must not fight the playhead jump
@@ -3137,6 +3413,375 @@ function pausePlay() {
   stopMonitor();
   pauseSoundEls();
 }
+
+/* ---------------- mic recorder ---------------- */
+const mic = {
+  ctx: null, stream: null, source: null, processor: null, sink: null,
+  samples: new Float32Array(0), length: 0, sampleRate: 48000,
+  trimStart: 0, trimEnd: 0, playhead: 0,
+  recording: false, recordPos: 0,
+  playing: false, playNode: null, playStartCtx: 0, playStartPos: 0,
+  raf: 0, saved: false, trimDrag: null,
+};
+
+function micTakeDur() { return mic.length / mic.sampleRate; }
+function micTrimStartSec() { return mic.trimStart / mic.sampleRate; }
+function micTrimEndSec() { return mic.trimEnd / mic.sampleRate; }
+
+function micEnsureCtx() {
+  if (mic.ctx) return mic.ctx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) throw new Error('Audio capture is not available');
+  try { mic.ctx = new AC({ sampleRate: 48000, latencyHint: 'interactive' }); }
+  catch (_) { mic.ctx = new AC(); }
+  mic.sampleRate = mic.ctx.sampleRate;
+  return mic.ctx;
+}
+
+function micReset() {
+  mic.samples = new Float32Array(0);
+  mic.length = 0;
+  mic.trimStart = 0;
+  mic.trimEnd = 0;
+  mic.playhead = 0;
+  mic.recording = false;
+  mic.recordPos = 0;
+  mic.playing = false;
+  mic.playNode = null;
+  mic.saved = false;
+  mic.trimDrag = null;
+}
+
+function micWrite(chunk, at) {
+  const need = at + chunk.length;
+  if (need > mic.samples.length) {
+    let cap = Math.max(need, mic.samples.length * 2, mic.sampleRate * 5);
+    const next = new Float32Array(cap);
+    next.set(mic.samples.subarray(0, mic.length));
+    mic.samples = next;
+  }
+  mic.samples.set(chunk, at);
+  if (need > mic.length) mic.length = need;
+  if (need > mic.trimEnd) mic.trimEnd = need;
+}
+
+async function micStartCapture() {
+  if (mic.stream) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error('Microphone access is not available');
+  }
+  const ctx = micEnsureCtx();
+  if (ctx.state === 'suspended') await ctx.resume();
+  mic.stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      sampleRate: mic.sampleRate,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    },
+  });
+  mic.source = ctx.createMediaStreamSource(mic.stream);
+  mic.processor = ctx.createScriptProcessor(2048, 1, 1);
+  mic.processor.onaudioprocess = (ev) => {
+    if (!mic.recording) return;
+    const input = ev.inputBuffer.getChannelData(0);
+    const chunk = new Float32Array(input.length);
+    chunk.set(input);
+    micWrite(chunk, mic.recordPos);
+    mic.recordPos += chunk.length;
+    mic.playhead = mic.recordPos / mic.sampleRate;
+  };
+  // A muted sink keeps the processor pulling without monitoring the mic.
+  mic.sink = ctx.createGain();
+  mic.sink.gain.value = 0;
+  mic.source.connect(mic.processor);
+  mic.processor.connect(mic.sink);
+  mic.sink.connect(ctx.destination);
+}
+
+function micStopCapture() {
+  mic.recording = false;
+  try { if (mic.processor) mic.processor.disconnect(); } catch (_) {}
+  try { if (mic.source) mic.source.disconnect(); } catch (_) {}
+  try { if (mic.sink) mic.sink.disconnect(); } catch (_) {}
+  try { if (mic.stream) mic.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  mic.processor = null;
+  mic.source = null;
+  mic.sink = null;
+  mic.stream = null;
+}
+
+async function micToggleRecord() {
+  if (mic.recording) {
+    micStopCapture();
+    micUpdateUI();
+    micDraw();
+    return;
+  }
+  if (mic.playing) micPauseTake();
+  const at = Math.max(0, Math.min(mic.length, Math.round(mic.playhead * mic.sampleRate)));
+  mic.recordPos = at;
+  mic.trimStart = Math.min(mic.trimStart, at);
+  try {
+    await micStartCapture();
+  } catch (e) {
+    toast('Microphone unavailable: ' + (e && e.message ? e.message : e), { danger: true });
+    return;
+  }
+  mic.recording = true;
+  mic.saved = false;
+  micUpdateUI();
+  micLoop();
+  setStatus('Recording… click Stop to finish');
+}
+
+function micPauseTake() {
+  if (!mic.playing) return;
+  const ctx = mic.ctx;
+  if (ctx) mic.playhead = mic.playStartPos + (ctx.currentTime - mic.playStartCtx);
+  mic.playhead = Math.max(micTrimStartSec(), Math.min(micTrimEndSec(), mic.playhead));
+  try { if (mic.playNode) mic.playNode.stop(); } catch (_) {}
+  mic.playNode = null;
+  mic.playing = false;
+  micUpdateUI();
+  micDraw();
+}
+
+async function micTogglePlay() {
+  if (mic.recording) micStopCapture();
+  if (mic.playing) { micPauseTake(); return; }
+  if (mic.trimEnd <= mic.trimStart) return;
+  if (mic.playhead < micTrimStartSec() || mic.playhead >= micTrimEndSec()) mic.playhead = micTrimStartSec();
+  const ctx = micEnsureCtx();
+  if (ctx.state === 'suspended') await ctx.resume();
+  const start = mic.trimStart;
+  const len = mic.trimEnd - mic.trimStart;
+  if (len <= 0) return;
+  const buf = ctx.createBuffer(1, len, mic.sampleRate);
+  buf.copyToChannel(mic.samples.subarray(start, mic.trimEnd), 0);
+  const node = ctx.createBufferSource();
+  node.buffer = buf;
+  node.connect(ctx.destination);
+  node.onended = () => {
+    if (mic.playNode !== node) return;
+    mic.playNode = null;
+    mic.playing = false;
+    mic.playhead = micTrimEndSec();
+    micUpdateUI();
+    micDraw();
+  };
+  mic.playNode = node;
+  mic.playStartCtx = ctx.currentTime;
+  mic.playStartPos = mic.playhead;
+  mic.playing = true;
+  node.start(0, Math.max(0, mic.playhead - micTrimStartSec()));
+  micLoop();
+}
+
+function micStopTake() {
+  if (mic.recording) micStopCapture();
+  if (mic.playing) micPauseTake();
+  mic.playhead = micTrimStartSec();
+  micUpdateUI();
+  micDraw();
+}
+
+function micLoop() {
+  if (mic.raf) { cancelAnimationFrame(mic.raf); mic.raf = 0; }
+  const tick = () => {
+    if ($('#mic-modal').classList.contains('hidden')) { mic.raf = 0; return; }
+    if (mic.playing && mic.ctx) {
+      mic.playhead = mic.playStartPos + (mic.ctx.currentTime - mic.playStartCtx);
+      if (mic.playhead >= micTrimEndSec()) {
+        mic.playhead = micTrimEndSec();
+        mic.playing = false;
+        try { if (mic.playNode) mic.playNode.stop(); } catch (_) {}
+        mic.playNode = null;
+      }
+    }
+    micUpdateUI();
+    micDraw();
+    mic.raf = (mic.playing || mic.recording) ? requestAnimationFrame(tick) : 0;
+  };
+  tick();
+}
+
+function micUpdateUI() {
+  const dur = micTakeDur();
+  const ph = Math.max(0, Math.min(dur, mic.playhead));
+  const time = `${ph.toFixed(3)} / ${dur.toFixed(3)}`;
+  const t = $('#mic-time');
+  if (t) t.textContent = time;
+  const rec = $('#mic-rec-dot');
+  if (rec) rec.classList.toggle('hidden', !mic.recording);
+  const rl = $('#mic-record-label');
+  if (rl) rl.textContent = mic.recording ? 'Stop rec' : 'Record';
+  const pl = $('#mic-play-label');
+  if (pl) pl.textContent = mic.playing ? 'Pause' : 'Play';
+  const use = $('#mic-use-play');
+  if (use) use.setAttribute('href', mic.playing ? '#i-pause' : '#i-play');
+}
+
+function micDraw() {
+  const canvas = $('#mic-wave');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, w, h);
+  const dur = mic.length;
+  const mid = h / 2;
+  if (!dur) {
+    g.fillStyle = 'rgba(255,255,255,.28)';
+    g.font = `${12 * dpr}px sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('Press Record to start a take', w / 2, mid);
+    const l = $('#mic-trim-l'), r = $('#mic-trim-r'), ph = $('#mic-playhead');
+    if (l) l.style.left = '0%';
+    if (r) r.style.right = '0%';
+    if (ph) ph.style.left = '0%';
+    return;
+  }
+  // Dim the trimmed-away head/tail.
+  const x0 = (mic.trimStart / dur) * w;
+  const x1 = (mic.trimEnd / dur) * w;
+  g.fillStyle = 'rgba(0,0,0,.45)';
+  g.fillRect(0, 0, Math.max(0, x0), h);
+  g.fillRect(Math.max(0, x1), 0, Math.max(0, w - x1), h);
+
+  const buckets = Math.max(1, Math.floor(w / 2));
+  g.strokeStyle = 'rgba(120, 220, 255, .95)';
+  g.lineWidth = Math.max(1, dpr);
+  g.beginPath();
+  for (let i = 0; i < buckets; i++) {
+    const a = Math.floor((i / buckets) * dur);
+    const b = Math.max(a + 1, Math.floor(((i + 1) / buckets) * dur));
+    const step = Math.max(1, Math.floor((b - a) / 12));
+    let peak = 0;
+    for (let j = a; j < b; j += step) {
+      const v = Math.abs(mic.samples[j] || 0);
+      if (v > peak) peak = v;
+    }
+    const half = Math.max(dpr * 0.75, peak * (h / 2 - 6 * dpr));
+    const x = (i / buckets) * w;
+    g.moveTo(x, mid - half);
+    g.lineTo(x, mid + half);
+  }
+  g.stroke();
+
+  const l = $('#mic-trim-l'), r = $('#mic-trim-r'), ph = $('#mic-playhead');
+  if (l) l.style.left = `${(mic.trimStart / dur) * 100}%`;
+  if (r) r.style.right = `${((1 - mic.trimEnd / dur) * 100)}%`;
+  if (ph) {
+    const px = Math.max(0, Math.min(dur, mic.playhead * mic.sampleRate));
+    ph.style.left = `${(px / dur) * 100}%`;
+  }
+}
+
+function micMiniTimeAt(clientX) {
+  const box = $('#mic-mini').getBoundingClientRect();
+  if (!box.width || !mic.length) return 0;
+  return Math.max(0, Math.min(mic.length, Math.round(((clientX - box.left) / box.width) * mic.length)));
+}
+
+function micClampPlayhead() {
+  mic.playhead = Math.max(micTrimStartSec(), Math.min(micTrimEndSec(), mic.playhead));
+}
+
+function micOpen() {
+  if (state.playing) pausePlay();
+  micReset();
+  try { micEnsureCtx(); } catch (e) { toast('Microphone unavailable: ' + e, { danger: true }); return; }
+  $('#mic-name').value = MicWav.stampName(new Date());
+  $('#mic-modal').classList.remove('hidden');
+  micUpdateUI();
+  micDraw();
+  micLoop();
+  setStatus('Mic recorder — press Record and speak');
+}
+
+function micClose(force) {
+  if (mic.recording) micStopCapture();
+  if (mic.playing) micPauseTake();
+  if (!force && mic.length > 0 && !mic.saved) {
+    if (!confirm('Discard this mic take?')) return;
+  }
+  if (mic.raf) { cancelAnimationFrame(mic.raf); mic.raf = 0; }
+  try { if (mic.ctx) mic.ctx.close(); } catch (_) {}
+  mic.ctx = null;
+  try { if (mic.stream) mic.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  micReset();
+  $('#mic-modal').classList.add('hidden');
+  setStatus('Ready');
+}
+
+async function micSaveTake() {
+  if (mic.recording) micStopCapture();
+  if (mic.playing) micPauseTake();
+  if (!mic.length || mic.trimEnd <= mic.trimStart) {
+    toast('Record something first', { danger: true });
+    return;
+  }
+  const name = ($('#mic-name').value || '').trim() || MicWav.stampName(new Date());
+  const pcm = MicWav.trimSamples(mic.samples, mic.trimStart, mic.trimEnd);
+  const data = MicWav.encodeWav(pcm, mic.sampleRate);
+  let res;
+  try { res = await api.micSave({ name, data }); }
+  catch (e) { toast('Could not save mic take: ' + e, { danger: true }); return; }
+  if (!res || !res.ok) {
+    toast('Could not save mic take: ' + ((res && res.error) || 'unknown error'), { danger: true });
+    return;
+  }
+  mic.saved = true;
+  toast(`Saved ${res.name} to Mic Record`);
+  micClose(true);
+  refreshBin('sounds');
+}
+
+function wireMicEvents() {
+  $('#btn-mic').addEventListener('click', micOpen);
+  $('#mic-record').addEventListener('click', micToggleRecord);
+  $('#mic-play').addEventListener('click', micTogglePlay);
+  $('#mic-stop').addEventListener('click', micStopTake);
+  $('#mic-cancel').addEventListener('click', () => micClose(false));
+  $('#mic-save').addEventListener('click', micSaveTake);
+  $('#mic-mini').addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.mic-trim-handle');
+    if (handle) {
+      mic.trimDrag = handle.classList.contains('l') ? 'l' : 'r';
+      if (mic.playing) micPauseTake();
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+      return;
+    }
+    if (mic.playing) micPauseTake();
+    mic.playhead = micMiniTimeAt(e.clientX) / mic.sampleRate;
+    micClampPlayhead();
+    micUpdateUI();
+    micDraw();
+  });
+  $('#mic-mini').addEventListener('pointermove', (e) => {
+    if (!mic.trimDrag) return;
+    const at = micMiniTimeAt(e.clientX);
+    const min = Math.round(MIN_LEN * mic.sampleRate);
+    if (mic.trimDrag === 'l') mic.trimStart = Math.max(0, Math.min(mic.trimEnd - min, at));
+    else mic.trimEnd = Math.min(mic.length, Math.max(mic.trimStart + min, at));
+    mic.saved = false;
+    micClampPlayhead();
+    micUpdateUI();
+    micDraw();
+  });
+  const endTrim = () => { mic.trimDrag = null; };
+  $('#mic-mini').addEventListener('pointerup', endTrim);
+  $('#mic-mini').addEventListener('pointercancel', endTrim);
+}
+
 
 /* ---------------- viewer: program output vs single-clip media preview ----------------
    'program' shows the edited timeline (no native transport — the timeline owns the
@@ -3165,11 +3810,28 @@ function enterMediaPreview(item) {
   state.viewer.mode = 'media';
   state.viewer.mediaPath = item.path;
   const v = $('#preview-media');
+  const img = $('#preview-media-img');
   const url = api.toFileUrl(item.path);
-  if (v.dataset.path !== url) { v.dataset.path = url; v.src = url; }
-  try { v.currentTime = 0; } catch (_) {}
-  const pr = v.play();
-  if (pr && pr.then) pr.catch(() => {});
+  if (isImageItem(item)) {
+    try { v.pause(); } catch (_) {}
+    v.classList.add('hidden');
+    v.removeAttribute('src');
+    v.dataset.path = '';
+    if (img) {
+      img.src = url;
+      img.classList.remove('hidden');
+    }
+  } else {
+    if (img) {
+      img.classList.add('hidden');
+      img.removeAttribute('src');
+    }
+    v.classList.remove('hidden');
+    if (v.dataset.path !== url) { v.dataset.path = url; v.src = url; }
+    try { v.currentTime = 0; } catch (_) {}
+    const pr = v.play();
+    if (pr && pr.then) pr.catch(() => {});
+  }
   $('#media-empty').classList.add('hidden');
   $('#preview-watermark').classList.remove('hidden');
   updateViewerClasses();
@@ -3179,9 +3841,15 @@ function enterMediaPreview(item) {
 function exitMediaPreview() {
   if (state.viewer.mode !== 'media') return;
   const v = $('#preview-media');
+  const img = $('#preview-media-img');
   try { v.pause(); } catch (_) {}
   v.removeAttribute('src');
   try { v.load(); } catch (_) {}
+  v.classList.remove('hidden');
+  if (img) {
+    img.classList.add('hidden');
+    img.removeAttribute('src');
+  }
   state.viewer.mode = 'program';
   state.viewer.mediaPath = null;
   $('#preview-watermark').classList.add('hidden');
@@ -3343,6 +4011,79 @@ function splitAtPlayhead() {
   setStatus(`Split ${n} item(s) at ${fmt(t)}`);
 }
 
+/* ---------------- freeze frame ---------------- */
+// The visible video clip under the playhead, plus the source timestamp to grab.
+function freezeTargetAt(t) {
+  const b = visibleVideoAt(t);
+  if (!b || !b.item || !b.item.path) return null;
+  if (TimelineOps.isStill(b.item)) return null;
+  const speed = speedOf(b.item);
+  const start = b.item.start || 0;
+  const srcStart = b.item.srcStart != null ? b.item.srcStart : (b.item.inPoint != null ? b.item.inPoint : 0);
+  return { ...b, freezeAt: srcStart + (t - start) * speed };
+}
+
+function updateFreezeButton() {
+  const b = $('#btn-freeze');
+  if (b) b.disabled = !freezeTargetAt(state.playhead);
+}
+
+function insertFreeze() {
+  const target = freezeTargetAt(state.playhead);
+  if (!target) {
+    setStatus('Move the playhead over a video clip to insert a freeze frame.');
+    return;
+  }
+  noteEditing();
+  if (state.playing) pausePlay();
+  const t = state.playhead;
+  const item = target.item;
+  const arr = target.lane === 'hybrid' ? state.hybrid : state.timeline;
+  const start = item.start || 0;
+  const end = start + durOf(item);
+  snapshot();
+  // Freeze is the one insert that splits mid-clip instead of snapping to an edge.
+  if (t > start + MIN_LEN && t < end - MIN_LEN) splitClipAt(item, t, arr);
+  TimelineOps.rippleOpen(state, t, FREEZE_LEN, 'all');
+  const freeze = {
+    id: newId(),
+    path: item.path,
+    name: `Freeze @ ${fmt(t)}`,
+    duration: FREEZE_LEN,
+    start: t,
+    srcStart: 0,
+    srcEnd: FREEZE_LEN,
+    kind: 'freeze',
+    still: true,
+    freezeAt: target.freezeAt,
+    mute: true,
+    speed: 1,
+    fit: item.fit || 'blur',
+    volume: 0,
+    width: item.width,
+    height: item.height,
+    fps: item.fps,
+    vcodec: 'image',
+    acodec: null,
+    hasAudio: false,
+    audioSampleRate: 0,
+    audioChannels: 0,
+    origin: 'freeze',
+  };
+  clearSelection();
+  if (target.lane === 'hybrid') {
+    state.hybrid.push(freeze);
+    state.selectedHyb.add(freeze.id);
+  } else {
+    state.timeline.push(freeze);
+    state.selectedIds.add(freeze.id);
+  }
+  commit('Insert freeze frame');
+  renderAll();
+  seekPreview(t);
+  setStatus(`Inserted a ${FREEZE_LEN}s freeze at ${fmt(t)}.`);
+}
+
 function deleteSelection() {
   noteEditing();
   if (state.selectedGaps.length) { closeGaps(state.selectedGaps); return; }
@@ -3441,7 +4182,14 @@ function placePaste(e) {
   const items = picks.map((it) => {
     const { _kind, ...rest } = it;
     const o = { ...rest, id: newId() };
-    if (lane === 'hybrid') o.kind = _kind; else delete o.kind;
+    if (lane === 'hybrid') {
+      // ALT stores sounds as 'sound' and every visual as a clip-ish kind.
+      if (_kind === 'sound') o.kind = 'sound';
+      else if (o.kind && o.kind !== 'video') { /* keep image/freeze/clip */ }
+      else o.kind = 'clip';
+    } else if (o.kind === 'video') {
+      delete o.kind;
+    }
     return o;
   });
   cancelPaste();
@@ -3471,7 +4219,7 @@ function closeGaps(gaps) {
       }
     }
     for (const h of state.hybrid) {
-      if (isAlt && h.kind !== 'clip') continue;
+      if (isAlt && h.kind === 'sound') continue;
       if (!isAlt && h.kind === 'sound') continue;
       const t = hybStartOf(h);
       if (t >= g.end - 1e-6) setHybStart(h, Math.max(-PREROLL, t - w));
@@ -3524,7 +4272,7 @@ function closeAllGaps() {
 // Close gaps inside the ALT lane only (its own ⇤ button).
 function closeHybridGaps() {
   noteEditing();
-  const hclips = state.hybrid.filter((h) => h.kind === 'clip');
+  const hclips = state.hybrid.filter((h) => h.kind !== 'sound');
   if (!hclips.length) { setStatus('Nothing to arrange in ALT.'); return; }
   snapshot();
   arrangeHybridClips();
@@ -3590,6 +4338,7 @@ function wireHotkeys() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     if (k === 'Delete') { e.preventDefault(); if (!e.repeat) deleteSelection(); return; }
+    if (k === 'r' || k === 'R') { e.preventDefault(); if (!e.repeat) insertFreeze(); return; }
     if (k === 's' || k === 'S') { e.preventDefault(); if (!e.repeat) splitAtPlayhead(); return; }
     if (k === 'a' || k === 'A') { e.preventDefault(); if (!e.repeat) jumpToCut(-1); return; }
     if (k === 'd' || k === 'D') { e.preventDefault(); if (!e.repeat) jumpToCut(1); return; }
@@ -3604,6 +4353,8 @@ function wireHotkeys() {
       return;
     }
     if (k === 'Escape') {
+      if (!$('#ctx-menu').classList.contains('hidden')) { closeContextMenu(); return; }
+      if (!$('#mic-modal').classList.contains('hidden')) { micClose(false); return; }
       if (pastePending) { cancelPaste(); setStatus('Paste cancelled.'); return; }
       if (state.viewer.mode === 'media') { exitMediaPreview(); return; }
       deselect(); return;
@@ -3837,7 +4588,7 @@ async function applySettings() {
 // not the project, so they are intentionally excluded.
 function projectData() {
   return {
-    version: 6,
+    version: 7,
     timeline: state.timeline,
     soundboard: state.soundboard,
     hybrid: state.hybrid,
@@ -3891,6 +4642,7 @@ function migrateClips(legacyClips) {
       id: c.id || newId(),
       path: c.path, name: c.name, duration: c.duration,
       start: acc, srcStart, srcEnd, mute: !!c.mute,
+      kind: c.kind || 'video',
       width: c.width, height: c.height, fps: c.fps, vcodec: c.vcodec, acodec: c.acodec,
       audioSampleRate: c.audioSampleRate, audioChannels: c.audioChannels, hasAudio: c.hasAudio,
     };
@@ -3900,7 +4652,16 @@ function migrateClips(legacyClips) {
 }
 
 function normalizeTimeline(rawItems) {
-  const items = rawItems.map((c) => ({ ...c, id: c.id || newId(), mute: !!c.mute }));
+  const items = rawItems.map((c) => {
+    const image = isImageItem(c);
+    return {
+      ...c,
+      id: c.id || newId(),
+      mute: c.mute != null ? !!c.mute : image,
+      kind: c.kind || (image ? 'image' : 'video'),
+      still: c.still || image || c.kind === 'freeze' || undefined,
+    };
+  });
   const anyStart = items.some((c) => c.start != null);
   if (!anyStart) {
     let acc = 0;
@@ -3932,7 +4693,14 @@ async function loadProject() {
     state.hybrid = Array.isArray(d.hybrid)
       ? d.hybrid.map((h) => {
         const kind = h.kind || ((h.startTime != null && h.srcEnd == null) ? 'sound' : 'clip');
-        return { ...h, id: h.id || newId(), kind };
+        const image = kind !== 'sound' && isImageItem(h);
+        return {
+          ...h,
+          id: h.id || newId(),
+          kind: image ? 'image' : kind,
+          still: h.still || image || kind === 'freeze' || undefined,
+          mute: kind !== 'sound' && image ? true : h.mute,
+        };
       })
       : [];
     state.markers = Array.isArray(d.markers)
@@ -4148,6 +4916,7 @@ function purgePayload(dryRun) {
     baseDir: (state.settings.baseDir || '').trim(),
     mediaExt: state.mediaExt,
     audioExt: state.audioExt,
+    imageExt: state.imageExt,
     dryRun,
   };
 }
@@ -4332,11 +5101,11 @@ function handleDrop(e) {
   const files = [...(e.dataTransfer?.files || [])]
     .map((f) => api.getPathForFile(f))
     .filter(Boolean);
-  const extOf = (f) => { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(i).toLowerCase() : ''; };
+  const extOf = (f) => { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(i + 1).toLowerCase() : ''; };
   const video = [], audio = [];
   for (const f of files) {
     const ext = extOf(f);
-    if (state.mediaExt.includes(ext)) video.push(f);
+    if (state.mediaExt.includes(ext) || state.imageExt.includes(ext)) video.push(f);
     else if (state.audioExt.includes(ext)) audio.push(f);
   }
   if (!video.length && !audio.length) return;
@@ -4367,6 +5136,13 @@ function handleDrop(e) {
 
 /* ---------------- events ---------------- */
 function wireEvents() {
+  wireMicEvents();
+  // Close the shared context menu on any outside press or window blur.
+  document.addEventListener('pointerdown', (e) => {
+    const menu = $('#ctx-menu');
+    if (menu && !menu.classList.contains('hidden') && !e.target.closest('#ctx-menu')) closeContextMenu();
+  }, true);
+  window.addEventListener('blur', closeContextMenu);
   $('#btn-new').addEventListener('click', async () => { if (await confirmUnsavedChanges()) newProject(); });
   $('#btn-open').addEventListener('click', loadProject);
   $('#btn-save').addEventListener('click', () => saveProject(false));
@@ -4381,6 +5157,8 @@ function wireEvents() {
   $('#btn-export').addEventListener('click', doExport);
   $('#btn-export-cancel').addEventListener('click', () => { api.cancelExport(); setStatus('Cancelling export…'); });
   $('#btn-help').addEventListener('click', () => $('#help-modal').classList.remove('hidden'));
+  const freezeBtn = $('#btn-freeze');
+  if (freezeBtn) freezeBtn.addEventListener('click', insertFreeze);
   $('#help-close').addEventListener('click', () => $('#help-modal').classList.add('hidden'));
   $('#btn-history').addEventListener('click', () => { renderHistory(); $('#history-modal').classList.remove('hidden'); });
   $('#history-close').addEventListener('click', () => $('#history-modal').classList.add('hidden'));

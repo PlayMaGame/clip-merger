@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, sourceConflict, restoreDocument } = require('../renderer/timeline-ops');
+const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
 
 const clip = (start, dur) => ({ id: `c${start}`, start, srcStart: 0, srcEnd: dur, speed: 1 });
 const hybClip = (start, dur) => ({ id: `h${start}`, kind: 'clip', start, srcStart: 0, srcEnd: dur, speed: 1 });
@@ -121,6 +121,10 @@ test('laneAccepts: MAIN takes clips only, SOUND sounds only, ALT both', () => {
   assert.equal(laneAccepts('sounds', 'clip'), false);
   assert.equal(laneAccepts('hybrid', 'clip'), true);
   assert.equal(laneAccepts('hybrid', 'sound'), true);
+  assert.equal(laneAccepts('clips', 'image'), true);
+  assert.equal(laneAccepts('clips', 'freeze'), true);
+  assert.equal(laneAccepts('sounds', 'image'), false);
+  assert.equal(laneAccepts('hybrid', 'freeze'), true);
   assert.equal(laneAccepts('nope', 'clip'), false);
 });
 
@@ -309,4 +313,12 @@ test('restoreDocument defaults missing lanes (legacy snapshots) to empty arrays'
   assert.deepEqual(d.hybrid, []);
   assert.deepEqual(d.markers, []);
   assert.deepEqual(d.effects, []);
+});
+
+test('isStill recognizes images, freezes, and explicit still flags', () => {
+  assert.equal(isStill({ kind: 'image' }), true);
+  assert.equal(isStill({ kind: 'freeze' }), true);
+  assert.equal(isStill({ still: true, kind: 'clip' }), true);
+  assert.equal(isStill({ kind: 'video' }), false);
+  assert.equal(isStill(null), false);
 });

@@ -302,14 +302,20 @@ function governingEffectAt(effects, t) {
 }
 
 function cutArgs(src, inPoint, outPoint, cfg) {
-  const { mode, encoder, encoderOpts, W, H, FPS, normalize, mute, speed = 1, fit = 'blur', volumeDb = 0, zoom = null, camera = null } = cfg;
+  const { mode, encoder, encoderOpts, W, H, FPS, normalize, mute, speed = 1, fit = 'blur', volumeDb = 0, zoom = null, camera = null, still = false } = cfg;
   const dur = Math.max(0.001, outPoint - inPoint);
   const slow = Math.abs(speed - 1) > 1e-6;
   const outDur = dur / speed; // duration after the speed change
   const blur = fit === 'blur';
   let vmap = '0:v:0';
   const a = ['-hide_banner', '-loglevel', 'error', '-nostats', '-y'];
-  a.push('-ss', inPoint.toFixed(3), '-t', dur.toFixed(3), '-i', src);
+  if (still) {
+    // One still image held for the segment's duration. No seek is possible (or
+    // wanted); the audio track is always the silent one below.
+    a.push('-loop', '1', '-framerate', String(FPS), '-t', outDur.toFixed(3), '-i', src);
+  } else {
+    a.push('-ss', inPoint.toFixed(3), '-t', dur.toFixed(3), '-i', src);
+  }
   if (mute) {
     a.push('-f', 'lavfi', '-t', outDur.toFixed(3), '-i', 'anullsrc=r=48000:cl=stereo');
   }
@@ -373,8 +379,8 @@ function cutArgs(src, inPoint, outPoint, cfg) {
       const pre = slow ? `setpts=PTS/${speed},` : '';
       a.push('-filter_complex',
         `[0:v]${pre}fps=${FPS},split=2[fg][bg];` +
-        `[bg]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:5[bg2];` +
-        `[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg2];` +
+        `[bg]scale=${W}:${H}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${W}:${H},boxblur=20:5[bg2];` +
+        `[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2[fg2];` +
         `[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1[v]`);
       vmap = '[v]';
       a.push('-map', '[v]');
@@ -442,6 +448,22 @@ function visualToOutput(t, clips, srcStartOfFn, srcEndOfFn, speedFn) {
     if (t < s) return out;
     if (t < s + d) return out + (t - s);
     out += d;
+  }
+  return out;
+}
+
+// Freeze frames are generated on export only: read one frame from the source
+// video at the freeze timestamp and feed it to the still path. Nothing is cached
+// to disk alongside the media.
+async function extractStillFrame(ffmpegPath, src, at, out) {
+  const r = await spawnFfmpeg(ffmpegPath, [
+    '-hide_banner', '-loglevel', 'error', '-nostats', '-y',
+    '-ss', Math.max(0, Number(at) || 0).toFixed(3),
+    '-i', src, '-frames:v', '1', '-update', '1', '-q:v', '2', out,
+  ], null, 0, 0);
+  assertNotCancelled();
+  if (r.code !== 0 || !fs.existsSync(out)) {
+    throw new Error('Failed freezing frame:\n' + r.err.slice(-800));
   }
   return out;
 }
@@ -545,15 +567,7 @@ async function exportProject(opts) {
     const outDur = vis.outDur;
     const seg = path.join(workDir, `seg_${String(segNo).padStart(3, '0')}.mp4`);
 
-    const kfs = await keyframes(ffprobePath, c.path).catch(() => []);
-    const dimsOk = c.width === W && c.height === H && Math.abs((c.fps || 0) - FPS) < 0.05;
-    const vOk = c.vcodec === 'h264' && dimsOk;
-    const aOk = c.hasAudio && c.acodec === 'aac'
-      && c.audioSampleRate === 48000 && c.audioChannels === 2;
-    const inKf = isKeyframe(inPoint, kfs, 0.05);
-    const outKf = isKeyframe(outPoint, kfs, 0.05) || Math.abs(outPoint - c.duration) < 0.05;
-
-    // camera effects (adjustment layers) animating scale/pan over this segment
+    // Camera effects (adjustment layers) animating scale/pan over this segment.
     let camera = null;
     if (effects.length) {
       const segStart = vis.start;
@@ -563,18 +577,43 @@ async function exportProject(opts) {
         camera = buildCameraExprs(effects, segStart, segEnd, bgEff && bgEff.bg === 'blur' ? 'blur' : 'black');
       }
     }
+
+    const still = TimelineOps.isStill(c);
+    const stillKind = c.kind === 'freeze' || c.stillKind === 'freeze';
+    let stillSrc = c.path;
+    let mode;
     const volDb = c.volume || 0;
-    const mode = chooseMode({
-      vOk, aOk, inKf, outKf, normalize, speed, volDb, zoom: c.zoom || null, camera,
-    });
+    if (still) {
+      // Stills are always re-encoded: a single frame held for the segment, with a
+      // silent AAC track so the concat segments keep matching streams.
+      if (stillKind) {
+        stillSrc = path.join(workDir, `still_${String(segNo).padStart(3, '0')}.png`);
+        await extractStillFrame(ffmpegPath, c.path, c.freezeAt || 0, stillSrc);
+      }
+      mode = 'reencode';
+    } else {
+      const kfs = await keyframes(ffprobePath, c.path).catch(() => []);
+      const dimsOk = c.width === W && c.height === H && Math.abs((c.fps || 0) - FPS) < 0.05;
+      const vOk = c.vcodec === 'h264' && dimsOk;
+      const aOk = c.hasAudio && c.acodec === 'aac'
+        && c.audioSampleRate === 48000 && c.audioChannels === 2;
+      const inKf = isKeyframe(inPoint, kfs, 0.05);
+      const outKf = isKeyframe(outPoint, kfs, 0.05) || Math.abs(outPoint - c.duration) < 0.05;
+      mode = chooseMode({
+        vOk, aOk, inKf, outKf, normalize, speed, volDb: c.volume || 0, zoom: c.zoom || null, camera,
+      });
+    }
 
     onEvent({
       stage: 'cut', index: i, count: clips.length, mode,
       message: `Clip ${i + 1}/${clips.length}: ${mode === 'lossless' ? 'lossless copy' : mode === 'vlossless' ? 'video copy + audio re-encode' : 're-encode'}${speed !== 1 ? ` (${speed}× slow)` : ''}${mode === 'reencode' && c.fit === 'blur' ? ' (blur bg)' : ''}${Math.abs(volDb) > 1e-3 ? ` (${volDb > 0 ? '+' : ''}${volDb} dB)` : ''}`,
     });
 
-    const buildArgs = (enc, encOpts) => cutArgs(c.path, inPoint, outPoint, {
-      mode, encoder: enc, encoderOpts: encOpts, W, H, FPS, normalize, mute: !!c.mute, speed, fit: c.fit || 'blur', volumeDb: volDb, zoom: c.zoom || null, camera,
+    const buildArgs = (enc, encOpts) => cutArgs(still ? stillSrc : c.path, still ? 0 : inPoint, still ? dur : outPoint, {
+      mode, encoder: enc, encoderOpts: encOpts, W, H, FPS, normalize,
+      mute: still ? true : !!c.mute,
+      speed: still ? 1 : speed, fit: c.fit || 'blur', volumeDb: volDb,
+      zoom: still ? null : (c.zoom || null), camera, still,
     }).concat([seg]);
     const runSeg = async (enc, encOpts) => {
       const args = buildArgs(enc, encOpts);

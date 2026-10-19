@@ -94,8 +94,8 @@
 
   // Which lanes an item of a given kind may live in. ALT (hybrid) holds both.
   function laneAccepts(lane, kind) {
-    if (lane === 'hybrid') return kind === 'clip' || kind === 'sound';
-    if (lane === 'clips') return kind === 'clip';
+    if (lane === 'hybrid') return kind === 'clip' || kind === 'sound' || kind === 'image' || kind === 'freeze' || kind === 'video';
+    if (lane === 'clips') return kind === 'clip' || kind === 'image' || kind === 'freeze' || kind === 'video';
     if (lane === 'sounds') return kind === 'sound';
     return false;
   }
@@ -262,7 +262,13 @@
     };
   }
 
-  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, sourceConflict, restoreDocument };
+  // Stills share one code path through preview and export: images and freeze
+  // frames carry no moving source, but behave like clips on a video lane.
+  function isStill(item) {
+    return !!(item && (item.still === true || item.kind === 'image' || item.kind === 'freeze'));
+  }
+
+  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, sourceConflict, restoreDocument, isStill };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TimelineOps = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

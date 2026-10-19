@@ -3,9 +3,31 @@
 All notable changes to Clip Merger are documented here.
 Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 
-## [Unreleased]
+## [0.9.0] - 2026-10-19
+
+### Added
+- **Mic recording.** The **Mic** button opens a recorder that captures the default
+  microphone as 48 kHz mono WAV. It draws a live waveform, supports punch-in recording
+  from the mini-timeline playhead, and trims both ends before saving. Takes land in the
+  Sounds bin under **Mic Record**; they are not added to the timeline automatically.
+- **Favorites for every bin.** Right-click a Media/Images, Sound, Transition or Effect
+  item to rate it 1–5 stars, clear the rating, or reveal it in Explorer. Favorites sort
+  above unstarred items (most stars first, then name) and persist per path in
+  `userData/library.json`; built-in effects are keyed by effect id.
+- **Images on the timeline.** The Media bin accepts PNG/JPG/JPEG/WebP/GIF/BMP, and an
+  `IMAGES` folder is pinned to the top of the bin. Stills add as 3-second clips on MAIN
+  or ALT, can be trimmed longer, take zoom/pan/shake effects, show real thumbnails and
+  previews, and export as looping stills.
+- **Freeze frame.** Put the playhead over a video clip and press **Freeze** (or **R**)
+  to split the clip if needed and insert a 3-second freeze, rippling every lane and
+  marker to the right. Freezes trim like clips, take camera effects, use an ice-block
+  look, and export a frame regenerated from the source at that timestamp.
+- Project format is now **v7** with explicit `video` / `image` / `freeze` kinds; older
+  projects load as video clips.
 
 ### Fixed
+- **Bin thumbnails work again.** Thumbnail temp files now keep a `.jpg` suffix, so
+  ffmpeg can infer the output format instead of failing before the image is written.
 - **Exports can no longer overwrite a source clip.** The save dialog rejects any
   path used by the timeline, ALT or sound lanes, and the export pipeline repeats
   the check as a second line of defense.

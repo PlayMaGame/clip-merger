@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -8,7 +8,10 @@ const { exportProject, cancelExport } = require('./ffmpeg/export');
 const { createExportGuard } = require('./export-guard');
 const { buildPlan, applyPlan } = require('./purge-media');
 const { writeFileAtomic } = require('./fs-atomic');
-const { MEDIA_EXT, AUDIO_EXT, MEDIA_EXT_LIST, AUDIO_EXT_LIST } = require('./media-types');
+const { safeMicFileName, uniqueFilePath } = require('./mic-save');
+const { readLibrary, withRating } = require('./library');
+const { MEDIA_EXT, AUDIO_EXT, IMAGE_EXT, MEDIA_EXT_LIST, AUDIO_EXT_LIST, IMAGE_EXT_LIST, scanExtSet } = require('./media-types');
+const { isImagePath, imageItemFromProbe } = require('./image-meta');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_FFMPEG = 'ffmpeg';
@@ -219,7 +222,16 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => { sweepThumbCache(); sweepPreviewCache(); createWindow(); });
+app.whenReady().then(() => {
+  // Mic recording: allow getUserMedia audio from the app's own window.
+  try {
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(permission === 'media');
+    });
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media');
+  } catch (_) { /* older Electron */ }
+  sweepThumbCache(); sweepPreviewCache(); createWindow();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
@@ -248,6 +260,30 @@ function writeSettingsStore(data) {
 }
 ipcMain.handle('settings:set', async (_e, data) => writeSettingsStore(data));
 
+/* ---------------- favorites (library.json) ---------------- */
+// Ratings are user preferences, not project data: they follow the file path
+// across projects and never touch the media itself.
+function libraryStorePath() {
+  return path.join(app.getPath('userData'), 'library.json');
+}
+ipcMain.handle('library:get', async () => {
+  try {
+    return { ok: true, ratings: readLibrary(libraryStorePath()).ratings };
+  } catch (e) {
+    return { ok: false, ratings: {}, error: String(e) };
+  }
+});
+ipcMain.handle('library:set', async (_e, { key, stars }) => {
+  try {
+    const file = libraryStorePath();
+    const lib = withRating(readLibrary(file), key, stars);
+    writeFileAtomic(file, JSON.stringify(lib, null, 2));
+    return { ok: true, ratings: lib.ratings };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+});
+
 ipcMain.handle('app:init', async (_e, cfg) => {
   const ffmpegPath = (cfg && cfg.ffmpegPath) || DEFAULT_FFMPEG;
   const ffprobePath = (cfg && cfg.ffprobePath) || DEFAULT_FFPROBE;
@@ -262,6 +298,7 @@ ipcMain.handle('app:init', async (_e, cfg) => {
     preferred: cachedEncoders.preferred,
     mediaExt: MEDIA_EXT_LIST,
     audioExt: AUDIO_EXT_LIST,
+    imageExt: IMAGE_EXT_LIST,
     saved: readSettingsStore(),
     defaults: {
       ffmpegPath,
@@ -284,7 +321,10 @@ ipcMain.handle('app:init', async (_e, cfg) => {
 ipcMain.handle('dialog:openMedia', async (_e, opts) => {
   const filters = opts && opts.audio
     ? [{ name: 'Audio', extensions: AUDIO_EXT_LIST }]
-    : [{ name: 'Video', extensions: MEDIA_EXT_LIST }];
+    : [
+      { name: 'Video and images', extensions: [...MEDIA_EXT_LIST, ...IMAGE_EXT_LIST] },
+      { name: 'Images', extensions: IMAGE_EXT_LIST },
+    ];
   const res = await dialog.showOpenDialog(win, {
     title: opts && opts.audio ? 'Add soundboard audio' : 'Add clips',
     properties: ['openFile', 'multiSelections'],
@@ -313,7 +353,7 @@ ipcMain.handle('project:probe', async (_e, { ffprobePath, files }) => {
     try {
       const info = await workLimiter(() => probe(ffprobePath || DEFAULT_FFPROBE, f));
       info.name = path.basename(f);
-      return info;
+      return isImagePath(f) ? imageItemFromProbe(info, f) : info;
     } catch (e) {
       return { path: f, name: path.basename(f), error: String(e) };
     }
@@ -326,6 +366,28 @@ ipcMain.handle('project:keyframes', async (_e, { ffprobePath, file }) => {
     return { path: file, times: await keyframes(ffprobePath || DEFAULT_FFPROBE, file) };
   } catch (e) {
     return { path: file, error: String(e) };
+  }
+});
+
+/* Mic takes arrive as a complete mono 48 kHz PCM WAV built in the renderer. */
+ipcMain.handle('mic:save', async (_e, payload) => {
+  try {
+    const data = payload && payload.data;
+    if (!data) return { ok: false, error: 'No audio data' };
+    const buf = Buffer.from(data);
+    if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') {
+      return { ok: false, error: 'Invalid WAV data' };
+    }
+    const saved = readSettingsStore() || {};
+    const soundsDir = saved.soundsDir || path.join(ROOT, 'sounds');
+    const dir = path.join(soundsDir, 'Mic Record');
+    fs.mkdirSync(dir, { recursive: true });
+    const base = safeMicFileName(payload.name || '');
+    const file = uniqueFilePath(dir, base, '.wav', (p) => fs.existsSync(p));
+    writeFileAtomic(file, buf);
+    return { ok: true, file, name: path.basename(file) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
 });
 
@@ -456,10 +518,10 @@ ipcMain.handle('shell:reveal', async (_e, file) => {
 ipcMain.handle('media:purge', async (_e, opts) => {
   const dryRun = !(opts && opts.dryRun === false);
   const extSet = new Set();
-  for (const e of [...((opts && opts.mediaExt) || []), ...((opts && opts.audioExt) || [])]) {
+  for (const e of [...((opts && opts.mediaExt) || []), ...((opts && opts.audioExt) || []), ...((opts && opts.imageExt) || [])]) {
     extSet.add('.' + String(e).replace(/^\./, '').toLowerCase());
   }
-  if (!extSet.size) { for (const e of MEDIA_EXT) extSet.add(e); for (const e of AUDIO_EXT) extSet.add(e); }
+  if (!extSet.size) { for (const e of MEDIA_EXT) extSet.add(e); for (const e of AUDIO_EXT) extSet.add(e); for (const e of IMAGE_EXT) extSet.add(e); }
 
   const plan = buildPlan({
     outputDir: opts && opts.outputDir,
@@ -555,7 +617,7 @@ ipcMain.handle('base:list', async (_e, { dir }) => {
 });
 
 ipcMain.handle('base:scan', async (e, { ffprobePath, dir, mode, depth, watch }) => {
-  const extSet = mode === 'audio' ? AUDIO_EXT : MEDIA_EXT;
+  const extSet = scanExtSet(mode);
   // `depth` 0 = this folder only (breadcrumb navigation); the default keeps the
   // legacy recursive scan for callers that don't pass it.
   const maxDepth = Number.isFinite(depth) ? Math.max(0, depth) : 3;
@@ -571,7 +633,7 @@ ipcMain.handle('base:scan', async (e, { ffprobePath, dir, mode, depth, watch }) 
       try {
         const info = await probe(ffprobePath || DEFAULT_FFPROBE, f);
         info.name = path.basename(f);
-        item = info;
+        item = isImagePath(f) ? imageItemFromProbe(info, f) : info;
       } catch (_) { /* skip unreadable */ }
       done2 += 1;
       if (done2 % 5 === 0 || done2 === total) send({ dir, done: done2, total });
@@ -602,11 +664,12 @@ ipcMain.handle('base:thumbnail', async (_e, { ffmpegPath, file, maxW }) => {
       const dir = thumbDir();
       fs.mkdirSync(dir, { recursive: true });
       const out = path.join(dir, key);
-      const tmp = out + '.tmp' + process.pid + Date.now().toString(36);
+      const tmp = out.replace(/\.jpg$/, '') + '.tmp' + process.pid + Date.now().toString(36) + '.jpg';
       const baseArgs = [
         '-hide_banner', '-loglevel', 'error', '-y',
         '-threads', '1', '-filter_threads', '1',
-        '-ss', '0.2', '-i', file,
+        ...(isImagePath(file) ? [] : ['-ss', '0.2']),
+        '-i', file,
         '-frames:v', '1', '-an', '-vf', `scale=${w}:-2`, '-q:v', '4', tmp,
       ];
       // Try hardware decode first; ffmpeg does NOT fall back to software inside a
