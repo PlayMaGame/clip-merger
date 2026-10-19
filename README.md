@@ -114,3 +114,8 @@ merge.bat             your older one-shot batch merge script (kept, not used by 
 - Single video lane currently (no overlapping clips; dropping onto an occupied spot
   pushes it right).
 - No built-in frame thumbnails on timeline clips (bins show real frame previews).
+
+## Changelog
+
+Current version: **0.8.1**. See [CHANGELOG.md](CHANGELOG.md) for the full version
+history (every release, newest first).
