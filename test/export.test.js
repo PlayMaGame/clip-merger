@@ -1,6 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, zoomScaleExpr, buildCameraExprs, cameraActive, shakeExpr } = require('../electron/ffmpeg/export');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { exportProject, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, zoomScaleExpr, buildCameraExprs, cameraActive, shakeExpr, chooseMode, buildRenderPlan } = require('../electron/ffmpeg/export');
 
 function clip(start, srcStart, srcEnd, extra) {
   return Object.assign({
@@ -299,4 +302,101 @@ test('cutArgs camera applies a shake as an offset', () => {
   const fc = args[args.indexOf('-filter_complex') + 1];
   assert.match(fc, /sin\(/);
   assert.match(fc, /cos\(/);
+});
+
+test('exportProject refuses to write over a source clip', async () => {
+  const project = {
+    timeline: [{ path: 'C:\\Clips\\A.mp4', start: 0, srcStart: 0, srcEnd: 1 }],
+  };
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clipmerger-guard-'));
+  try {
+    await assert.rejects(
+      () => exportProject({
+        ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', project,
+        outputFile: 'c:/clips/a.MP4', workDir,
+      }),
+      /source/i,
+    );
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+// ---- Lossless mode selection -------------------------------------------------
+
+const modeBase = {
+  fit: 'blur', vOk: true, aOk: true, inKf: true, outKf: true,
+  normalize: false, speed: 1, volDb: 0, zoom: null, camera: null,
+};
+
+test('chooseMode: default blur framing stays lossless when source dims/FPS match', () => {
+  // Blur is invisible when the source already fills the output frame, so the
+  // default framing must not force a needless re-encode.
+  assert.equal(chooseMode(modeBase), 'lossless');
+});
+
+test('chooseMode: normalize or per-clip gain keeps video copy + audio re-encode', () => {
+  assert.equal(chooseMode({ ...modeBase, normalize: true }), 'vlossless');
+  assert.equal(chooseMode({ ...modeBase, volDb: 3 }), 'vlossless');
+});
+
+test('chooseMode: mismatched dims/FPS still re-encode for blur framing', () => {
+  assert.equal(chooseMode({ ...modeBase, vOk: false }), 'reencode');
+});
+
+test('chooseMode: non-keyframe cuts or mismatched audio fall back safely', () => {
+  assert.equal(chooseMode({ ...modeBase, inKf: false }), 'reencode');
+  assert.equal(chooseMode({ ...modeBase, outKf: false }), 'reencode');
+  assert.equal(chooseMode({ ...modeBase, aOk: false }), 'vlossless');
+});
+
+test('chooseMode: speed, zoom and camera effects force re-encode', () => {
+  assert.equal(chooseMode({ ...modeBase, speed: 0.5 }), 'reencode');
+  assert.equal(chooseMode({ ...modeBase, zoom: { level: 1.5 } }), 'reencode');
+  assert.equal(chooseMode({ ...modeBase, camera: { z: '1' } }), 'reencode');
+});
+
+// ---- Clips that start before 0:00 -------------------------------------------
+
+test('buildRenderPlan: trims a negative-start clip to the 0:00 boundary', () => {
+  const clips = [clip(-2, 0, 5, { path: 'a.mp4' })];
+  const { plan, visSpans, cursor } = buildRenderPlan(clips, [5]);
+  assert.deepEqual(plan, [{ clip: 0 }]);
+  assert.equal(visSpans[0].start, 0);
+  assert.equal(visSpans[0].outDur, 3);
+  assert.equal(visSpans[0].srcTrim, 2);
+  assert.equal(visSpans[0].skip, false);
+  assert.equal(cursor, 3);
+});
+
+test('buildRenderPlan: the gap after a clamped clip stays aligned', () => {
+  const clips = [clip(-2, 0, 5, { path: 'a.mp4' }), clip(5, 0, 2, { path: 'b.mp4' })];
+  const { plan, cursor } = buildRenderPlan(clips, [5, 2]);
+  assert.deepEqual(plan, [{ clip: 0 }, { black: 2 }, { clip: 1 }]);
+  assert.equal(cursor, 7);
+});
+
+test('buildRenderPlan: a clip entirely before 0:00 is dropped', () => {
+  const clips = [clip(-10, 0, 5, { path: 'a.mp4' }), clip(0, 0, 2, { path: 'b.mp4' })];
+  const { plan, visSpans, cursor } = buildRenderPlan(clips, [5, 2]);
+  assert.equal(visSpans[0].skip, true);
+  assert.deepEqual(plan, [{ clip: 1 }]);
+  assert.equal(cursor, 2);
+});
+
+test('buildRenderPlan: slow motion trims source by output time x speed', () => {
+  const clips = [clip(-2, 0, 5, { path: 'a.mp4', speed: 0.5 })];
+  const { visSpans } = buildRenderPlan(clips, [10]);
+  assert.equal(visSpans[0].outDur, 8);
+  assert.equal(visSpans[0].srcTrim, 1);
+});
+
+test('buildRenderPlan: positive starts are untouched', () => {
+  const clips = [clip(3, 0, 5, { path: 'a.mp4' })];
+  const { plan, visSpans, cursor } = buildRenderPlan(clips, [5]);
+  assert.deepEqual(plan, [{ black: 3 }, { clip: 0 }]);
+  assert.equal(visSpans[0].start, 3);
+  assert.equal(visSpans[0].outDur, 5);
+  assert.equal(visSpans[0].srcTrim, 0);
+  assert.equal(cursor, 8);
 });

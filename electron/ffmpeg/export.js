@@ -72,6 +72,55 @@ function mergeClipsByPriority(mainSeq, hybSeq) {
     .sort((a, b) => a.start - b.start);
 }
 
+// Choose how a source segment is written. Lossless requires a stream-copyable
+// source: H.264, exactly matching target dims/FPS, and keyframe-aligned edges.
+// `fit:'blur'` is the editor's default framing, but when the source already
+// fills the output frame the blurred background is covered and invisible — so
+// it must not force a needless re-encode (the exact-dims check already covers
+// the case where the frame would actually need scaling).
+function chooseMode({ vOk, aOk, inKf, outKf, normalize, speed = 1, volDb = 0, zoom = null, camera = null }) {
+  let mode = 'reencode';
+  if (vOk && inKf && outKf) mode = normalize ? 'vlossless' : 'lossless';
+  else if (vOk) mode = 'reencode';
+  // lossless audio also needs matching audio params
+  if (mode === 'lossless' && !aOk) mode = 'vlossless';
+  // slow motion needs filters, which can't be stream-copied
+  if (speed !== 1) mode = 'reencode';
+  // a per-clip zoom animates scale/crop — must be re-encoded
+  if (zoom) mode = 'reencode';
+  // camera effects (adjustment layers) animate scale/pan over this segment
+  if (camera) mode = 'reencode';
+  // a non-zero volume re-encodes audio — lossless stream-copy can't carry gain
+  if (mode === 'lossless' && Math.abs(volDb) > 1e-3) mode = 'vlossless';
+  return mode;
+}
+
+// Clips can be parked in the 20s editing-only pre-roll (negative start). Export
+// time begins at 0:00, so trim a negative start to the boundary and skip the
+// corresponding source seconds instead of shifting the whole edit later.
+function clampClipStart(start, outDur, speed) {
+  if (start >= 0) return { start, outDur, srcTrim: 0, skip: outDur <= 1e-6 };
+  const trim = Math.min(-start, outDur);
+  const visible = Math.max(0, outDur - trim);
+  return { start: 0, outDur: visible, srcTrim: trim * speed, skip: visible <= 1e-6 };
+}
+
+// Build the ordered render plan (clips + black padding for gaps) with any
+// negative timeline starts clamped to 0:00.
+function buildRenderPlan(clips, outDurs) {
+  const visSpans = clips.map((c, i) => clampClipStart(c.start || 0, outDurs[i], speedOf(c)));
+  const plan = [];
+  let cursor = 0;
+  for (let i = 0; i < clips.length; i++) {
+    const vis = visSpans[i];
+    if (vis.skip) continue;
+    if (vis.start > cursor + 1e-6) plan.push({ black: vis.start - cursor });
+    plan.push({ clip: i });
+    cursor = vis.start + vis.outDur;
+  }
+  return { plan, visSpans, cursor };
+}
+
 // Live ffmpeg processes, so a running export can be aborted from the UI.
 const liveChildren = new Set();
 let cancelRequested = false;
@@ -404,6 +453,11 @@ async function exportProject(opts) {
 
   cancelRequested = false;
 
+  // Never let a render target be one of the files feeding the render. The save
+  // dialog can otherwise overwrite irreplaceable source media via finalizeFile.
+  const conflict = TimelineOps.sourceConflict(outputFile, project);
+  if (conflict) throw new Error('Refusing to overwrite source media: ' + conflict);
+
   // Clips: merge MAIN + ALT by time with MAIN priority.
   // At any moment, the visible clip is the highest-priority one (MAIN > ALT).
   // Lower-priority clips are trimmed where a higher-priority clip covers them.
@@ -444,15 +498,9 @@ async function exportProject(opts) {
   // output time equal to timeline time, so sounds land where the editor shows
   // them instead of sliding earlier when video gaps collapse.
   const editorEnd = editorTotal(project);
-  const plan = [];
-  let cursor = 0;
-  for (let i = 0; i < clips.length; i++) {
-    const cs = clips[i].start || 0;
-    if (cs > cursor + 1e-6) plan.push({ black: cs - cursor });
-    plan.push({ clip: i });
-    cursor = cs + outDurs[i];
-  }
+  const { plan, visSpans, cursor } = buildRenderPlan(clips, outDurs);
   if (editorEnd > cursor + 1e-6) plan.push({ black: editorEnd - cursor });
+  if (!plan.some((step) => step.clip != null)) throw new Error('No clips overlap the exported timeline.');
   const totalDur = Math.max(editorEnd, cursor) || 1;
 
   const segFiles = [];
@@ -488,12 +536,13 @@ async function exportProject(opts) {
     }
     const i = step.clip;
     const c = clips[i];
-    const srcOffset = c._srcOffset || 0;
+    const vis = visSpans[i];
+    const srcOffset = (c._srcOffset || 0) + vis.srcTrim;
     const inPoint = Math.max(0, srcStartOf(c) + srcOffset);
     const outPoint = srcEndOf(c) != null ? srcEndOf(c) : c.duration;
     const speed = c.speed || 1;
-    const dur = srcDurs[i];
-    const outDur = outDurs[i];
+    const dur = srcDurs[i] - vis.srcTrim;
+    const outDur = vis.outDur;
     const seg = path.join(workDir, `seg_${String(segNo).padStart(3, '0')}.mp4`);
 
     const kfs = await keyframes(ffprobePath, c.path).catch(() => []);
@@ -504,35 +553,24 @@ async function exportProject(opts) {
     const inKf = isKeyframe(inPoint, kfs, 0.05);
     const outKf = isKeyframe(outPoint, kfs, 0.05) || Math.abs(outPoint - c.duration) < 0.05;
 
-    let mode = 'reencode';
-    if (vOk && inKf && outKf) mode = normalize ? 'vlossless' : 'lossless';
-    else if (vOk) mode = 'reencode';
-    // lossless audio also needs matching audio params
-    if (mode === 'lossless' && !aOk) mode = 'vlossless';
-    // slow motion needs filters, which can't be stream-copied
-    if (speed !== 1) mode = 'reencode';
-    // blurred-background framing re-scales the frame — must be re-encoded
-    if (c.fit === 'blur') mode = 'reencode';
-    // a per-clip zoom animates scale/crop — must be re-encoded
-    if (c.zoom) mode = 'reencode';
     // camera effects (adjustment layers) animating scale/pan over this segment
     let camera = null;
     if (effects.length) {
-      const segStart = c.start || 0;
+      const segStart = vis.start;
       const segEnd = segStart + outDur;
       if (cameraActive(effects, segStart, segEnd)) {
         const bgEff = governingEffectAt(effects, (segStart + segEnd) / 2);
         camera = buildCameraExprs(effects, segStart, segEnd, bgEff && bgEff.bg === 'blur' ? 'blur' : 'black');
-        if (camera) mode = 'reencode';
       }
     }
-    // a non-zero volume re-encodes audio — lossless stream-copy can't carry gain
     const volDb = c.volume || 0;
-    if (mode === 'lossless' && Math.abs(volDb) > 1e-3) mode = 'vlossless';
+    const mode = chooseMode({
+      vOk, aOk, inKf, outKf, normalize, speed, volDb, zoom: c.zoom || null, camera,
+    });
 
     onEvent({
       stage: 'cut', index: i, count: clips.length, mode,
-      message: `Clip ${i + 1}/${clips.length}: ${mode === 'lossless' ? 'lossless copy' : mode === 'vlossless' ? 'video copy + audio re-encode' : 're-encode'}${speed !== 1 ? ` (${speed}× slow)` : ''}${c.fit === 'blur' ? ' (blur bg)' : ''}${Math.abs(volDb) > 1e-3 ? ` (${volDb > 0 ? '+' : ''}${volDb} dB)` : ''}`,
+      message: `Clip ${i + 1}/${clips.length}: ${mode === 'lossless' ? 'lossless copy' : mode === 'vlossless' ? 'video copy + audio re-encode' : 're-encode'}${speed !== 1 ? ` (${speed}× slow)` : ''}${mode === 'reencode' && c.fit === 'blur' ? ' (blur bg)' : ''}${Math.abs(volDb) > 1e-3 ? ` (${volDb > 0 ? '+' : ''}${volDb} dB)` : ''}`,
     });
 
     const buildArgs = (enc, encOpts) => cutArgs(c.path, inPoint, outPoint, {
@@ -656,4 +694,4 @@ async function exportProject(opts) {
   return outputFile;
 }
 
-module.exports = { exportProject, cancelExport, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, zoomScaleExpr, buildCameraExprs, cameraActive, governingEffectAt, shakeExpr };
+module.exports = { exportProject, cancelExport, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, chooseMode, buildRenderPlan, zoomScaleExpr, buildCameraExprs, cameraActive, governingEffectAt, shakeExpr };

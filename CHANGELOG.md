@@ -5,6 +5,32 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 
 ## [Unreleased]
 
+### Fixed
+- **Exports can no longer overwrite a source clip.** The save dialog rejects any
+  path used by the timeline, ALT or sound lanes, and the export pipeline repeats
+  the check as a second line of defense.
+- **Project saves are atomic and failures are surfaced.** Saves write to a
+  sibling temp file and rename it into place; a failed write keeps the previous
+  project and leaves the unsaved-changes prompt usable instead of disabling its
+  Save button.
+- **Quitting during an export cancels ffmpeg and waits for cleanup.** Closing the
+  window now asks before cancelling an active render, kills its child processes,
+  and lets the temp work folder finish before the app exits.
+- **Keyframe caches invalidate when a source file changes.** Cache entries are
+  keyed by path plus timestamps and size, and the renderer clears its tick-mark
+  cache on bin refreshes, so replacing a file in place cannot make export treat
+  a non-keyframe cut as lossless.
+- **Lossless export is no longer disabled by the default blur framing.** When a
+  source already matches the output size/FPS, the blurred background is fully
+  covered and invisible, so keyframe-aligned cuts now stream-copy instead of
+  needlessly re-encoding. Blur still forces a re-encode when scaling is needed.
+- **Undo/redo restores camera effects.** Effects are captured in every history
+  snapshot and now restored with the other lanes, so undo/redo no longer leaves
+  added or edited effect bands behind.
+- **Clips starting before 0:00 export at the right time.** A clip parked in the
+  editing pre-roll is trimmed to the 0:00 boundary (skipping the hidden source
+  seconds) instead of shifting the rest of the edit later.
+
 ## [0.8.1] - 2026-10-18
 
 ### Fixed

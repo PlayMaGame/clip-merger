@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset } = require('../renderer/timeline-ops');
+const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, sourceConflict, restoreDocument } = require('../renderer/timeline-ops');
 
 const clip = (start, dur) => ({ id: `c${start}`, start, srcStart: 0, srcEnd: dur, speed: 1 });
 const hybClip = (start, dur) => ({ id: `h${start}`, kind: 'clip', start, srcStart: 0, srcEnd: dur, speed: 1 });
@@ -266,4 +266,47 @@ test('effectPoseAt: a shake adds a positional offset (and a little overscan zoom
   const p = effectPoseAt(eff, 0.5);
   assert.ok(p.z > 1); // overscan so the shifted frame still covers
   assert.ok(Math.abs(p.cx - 0.5) > 1e-6 || Math.abs(p.cy - 0.5) > 1e-6);
+});
+
+test('sourceConflict detects an export path that matches any source clip', () => {
+  const project = {
+    timeline: [{ path: 'C:\\Clips\\A.mp4' }],
+    hybrid: [{ path: 'C:\\Clips\\B.mp4' }],
+    soundboard: [{ path: 'C:\\Music\\C.WAV' }],
+  };
+  assert.equal(sourceConflict('C:\\Clips\\A.mp4', project), 'C:\\Clips\\A.mp4');
+  assert.equal(sourceConflict('c:/clips/a.MP4', project), 'C:\\Clips\\A.mp4');
+  assert.equal(sourceConflict('C:\\Music\\c.wav', project), 'C:\\Music\\C.WAV');
+  assert.equal(sourceConflict('C:\\Output\\merged.mp4', project), null);
+  assert.equal(sourceConflict('', project), null);
+});
+
+test('sourceConflict also checks legacy clips arrays', () => {
+  const project = { clips: [{ path: 'C:\\Clips\\Legacy.mp4' }] };
+  assert.equal(sourceConflict('c:\\clips\\legacy.mp4', project), 'C:\\Clips\\Legacy.mp4');
+});
+
+test('restoreDocument restores every snapshotted lane including effects', () => {
+  const snap = JSON.stringify({
+    timeline: [{ id: 't' }],
+    soundboard: [{ id: 's' }],
+    hybrid: [{ id: 'h' }],
+    markers: [{ id: 'm' }],
+    effects: [{ id: 'e', type: 'shake' }],
+  });
+  const d = restoreDocument(snap);
+  assert.deepEqual(d.timeline, [{ id: 't' }]);
+  assert.deepEqual(d.soundboard, [{ id: 's' }]);
+  assert.deepEqual(d.hybrid, [{ id: 'h' }]);
+  assert.deepEqual(d.markers, [{ id: 'm' }]);
+  assert.deepEqual(d.effects, [{ id: 'e', type: 'shake' }]);
+});
+
+test('restoreDocument defaults missing lanes (legacy snapshots) to empty arrays', () => {
+  const d = restoreDocument(JSON.stringify({ timeline: [{ id: 't' }] }));
+  assert.deepEqual(d.timeline, [{ id: 't' }]);
+  assert.deepEqual(d.soundboard, []);
+  assert.deepEqual(d.hybrid, []);
+  assert.deepEqual(d.markers, []);
+  assert.deepEqual(d.effects, []);
 });

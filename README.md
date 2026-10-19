@@ -2,7 +2,8 @@
 
 A simple, DaVinci-like **clip merger** desktop app for Windows (Electron + ffmpeg).
 Put clips, transitions and sounds on a timeline, cut them around, and export a single
-merged video — **lossless-first** (stream-copies cuts that land on keyframes).
+merged video — **lossless-first** (stream-copies keyframe-aligned cuts when the source
+already matches the export size/FPS).
 
 ![Clip Merger screenshot](screenshot.jpg)
 
@@ -27,11 +28,12 @@ merged video — **lossless-first** (stream-copies cuts that land on keyframes).
   music beats, explosions, shots, etc.
 - **Custom timeline scrollbar** (drag the thumb / click the track) and a **✋ hand tool**
   to pan the timeline like a touchpad (middle-drag always pans; wheel works too).
-- **Export**: merges clips left→right, *closes gaps* (positions on the timeline are for
-  arranging), and remaps sound start times to the collapsed output so sound stays aligned.
-  Keyframe-aligned cuts are stream-copied; others are re-encoded with an auto-detected
-  encoder (AMD AMF / NVIDIA NVENC / CPU libx264).
-- **Save/Open projects** (JSON v4; older v1–v3 projects auto-migrate).
+- **Export**: merges clips in timeline order and preserves gaps as black video with
+  silence, so output time matches the editor and sounds stay aligned. Keyframe-aligned
+  cuts are stream-copied when the source already matches the output size/FPS; other
+  cuts are re-encoded with an auto-detected encoder (AMD AMF / NVIDIA NVENC / CPU
+  libx264).
+- **Save/Open projects** (JSON v6; older projects are normalized on load).
 - **Settings persist**: your ffmpeg/ffprobe paths, the three bin folders, output folder,
   encoder, size/FPS and normalize flag are remembered between launches.
 
@@ -109,10 +111,12 @@ merge.bat             your older one-shot batch merge script (kept, not used by 
 
 ## Known limits
 
-- Timeline positions are for arranging — export concatenates and closes gaps. Sound
-  start times are re-mapped to the collapsed output so music/sfx stay aligned.
-- Single video lane currently (no overlapping clips; dropping onto an occupied spot
-  pushes it right).
+- Timeline gaps are preserved on export as black video with silence; output time
+  matches the editor, and sounds are mixed at their timeline positions.
+- Two video lanes: MAIN and ALT. A MAIN clip wins wherever the lanes overlap; clips on
+  the same lane may not overlap (the editor blocks export until they are resolved).
+- Clips parked in the editing pre-roll (before 0:00) are trimmed to the 0:00 boundary
+  on export.
 - No built-in frame thumbnails on timeline clips (bins show real frame previews).
 
 ## Changelog

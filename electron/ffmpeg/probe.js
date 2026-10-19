@@ -1,9 +1,20 @@
+const fs = require('fs');
 const { run } = require('./encoders');
 
-// Keyframes for a file are stable between edits, so cache them by path. Bounded
-// FIFO — the export loop, IPC preview and anything else share one probe.
+// Keyframes for a file are stable between edits, so cache them by identity
+// (path + mtime + ctime + size). Bounded FIFO — the export loop, IPC preview
+// and anything else share one probe.
 const kfCache = new Map();
 const KF_CACHE_MAX = 500;
+
+function keyframeCacheKey(file) {
+  try {
+    const st = fs.statSync(file);
+    return `${file}|${st.mtimeMs}|${st.ctimeMs}|${st.size}`;
+  } catch (_) {
+    return file;
+  }
+}
 
 function parseRate(rate) {
   if (!rate || rate === '0/0') return 0;
@@ -33,9 +44,10 @@ async function probe(ffprobePath, file) {
   };
 }
 
-async function keyframes(ffprobePath, file, limit = 20000) {
-  if (kfCache.has(file)) return kfCache.get(file);
-  const { out } = await run(ffprobePath, [
+async function keyframes(ffprobePath, file, limit = 20000, runFn = run) {
+  const key = keyframeCacheKey(file);
+  if (kfCache.has(key)) return kfCache.get(key);
+  const { out } = await runFn(ffprobePath, [
     '-v', 'error', '-select_streams', 'v:0', '-skip_frame', 'nokey',
     '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', file,
   ]);
@@ -46,7 +58,7 @@ async function keyframes(ffprobePath, file, limit = 20000) {
     if (times.length >= limit) break;
   }
   times.sort((a, b) => a - b);
-  kfCache.set(file, times);
+  kfCache.set(key, times);
   if (kfCache.size > KF_CACHE_MAX) {
     const oldest = kfCache.keys().next().value;
     if (oldest !== undefined) kfCache.delete(oldest);

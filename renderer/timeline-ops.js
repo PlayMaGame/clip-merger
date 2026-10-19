@@ -21,6 +21,27 @@
   const hybDurOf = (h) => (h.kind === 'sound' ? sndDur(h) : durOf(h));
   const setHybStart = (h, t) => { if (h.kind === 'sound') h.startTime = t; else h.start = t; };
 
+  // Normalize a filesystem path for comparison: slash direction and case do not
+  // matter on the Windows targets this app supports. Return the original source
+  // path when `outputPath` would land on one, so callers can name it in an error.
+  const normPath = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  function sourceConflict(outputPath, project) {
+    const out = normPath(outputPath);
+    if (!out) return null;
+    const lists = [
+      project && project.timeline,
+      project && project.clips, // legacy project format
+      project && project.hybrid,
+      project && project.soundboard,
+    ];
+    for (const list of lists) {
+      for (const item of list || []) {
+        if (item && item.path && normPath(item.path) === out) return item.path;
+      }
+    }
+    return null;
+  }
+
   function lanesFor(scope) {
     switch (scope) {
       case 'main': return { timeline: true, hybrid: false, soundboard: false, markers: false };
@@ -226,7 +247,22 @@
     return { z, cx: ux, cy: uy };
   }
 
-  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset };
+  // Restore a history snapshot into the document shape. Every lane that
+  // snapshotDoc captures must be restored here — keeping this pure makes the
+  // "undo must restore effects too" contract unit-testable.
+  const asArray = (v) => (Array.isArray(v) ? v : []);
+  function restoreDocument(raw) {
+    const d = JSON.parse(raw);
+    return {
+      timeline: asArray(d.timeline),
+      soundboard: asArray(d.soundboard),
+      hybrid: asArray(d.hybrid),
+      markers: asArray(d.markers),
+      effects: asArray(d.effects),
+    };
+  }
+
+  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, sourceConflict, restoreDocument };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TimelineOps = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

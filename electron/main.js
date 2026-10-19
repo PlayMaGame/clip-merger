@@ -5,7 +5,9 @@ const crypto = require('crypto');
 const { detectEncoders, run, runRaw } = require('./ffmpeg/encoders');
 const { probe, keyframes } = require('./ffmpeg/probe');
 const { exportProject, cancelExport } = require('./ffmpeg/export');
+const { createExportGuard } = require('./export-guard');
 const { buildPlan, applyPlan } = require('./purge-media');
+const { writeFileAtomic } = require('./fs-atomic');
 const { MEDIA_EXT, AUDIO_EXT, MEDIA_EXT_LIST, AUDIO_EXT_LIST } = require('./media-types');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -16,6 +18,7 @@ let win = null;
 let allowClose = false;   // set once the renderer has cleared the unsaved-changes prompt
 let closePending = false; // a prompt is already showing; ignore repeat close requests
 let cachedEncoders = null;
+const exportGuard = createExportGuard();
 let thumbCache = new Map();      // thumbnail key -> cached file path (session cache)
 const thumbInflight = new Map(); // thumbnail key -> in-flight promise (coalesce duplicates)
 const baseWatchers = new Map();
@@ -360,8 +363,13 @@ ipcMain.handle('audio:waveform', async (_e, { ffmpegPath, file, srcStart, srcEnd
 });
 
 ipcMain.handle('project:save', async (_e, { file, data }) => {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  return true;
+  try {
+    writeFileAtomic(file, JSON.stringify(data, null, 2));
+    return { ok: true };
+  } catch (e) {
+    console.error('PROJECT_SAVE_ERR', e);
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
 });
 
 ipcMain.handle('project:load', async () => {
@@ -387,18 +395,28 @@ ipcMain.handle('project:saveAs', async (_e, data) => {
     filters: [{ name: 'Clip Merger project', extensions: ['json'] }],
   });
   if (res.canceled) return null;
-  fs.writeFileSync(res.filePath, JSON.stringify(data, null, 2));
-  return res.filePath;
+  try {
+    writeFileAtomic(res.filePath, JSON.stringify(data, null, 2));
+    return { ok: true, file: res.filePath };
+  } catch (e) {
+    console.error('PROJECT_SAVE_ERR', e);
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
 });
 
 // The renderer answered the close prompt: destroy the window (bypassing the
 // 'close' handler) only when it is safe to lose the current document.
-ipcMain.handle('app:close-confirm', (_e, ok) => {
-  closePending = false;
-  if (ok) {
-    allowClose = true;
-    if (win && !win.isDestroyed()) win.destroy();
+ipcMain.handle('app:close-confirm', async (_e, ok) => {
+  if (!ok) {
+    closePending = false;
+    return;
   }
+  // If a render is in flight, cancel it and let its finally block remove the
+  // work dir before the window (and app) goes away.
+  if (exportGuard.exporting) await exportGuard.cancelAndWait(cancelExport);
+  closePending = false;
+  allowClose = true;
+  if (win && !win.isDestroyed()) win.destroy();
 });
 
 ipcMain.handle('export:run', async (e, { ffmpegPath, ffprobePath, project, outputFile }) => {
@@ -409,11 +427,12 @@ ipcMain.handle('export:run', async (e, { ffmpegPath, ffprobePath, project, outpu
   // only clean it up when we created it (not something that pre-existed).
   const existed = !!(outputFile && fs.existsSync(outputFile));
   try {
-    const out = await exportProject({
+    const run = exportGuard.begin(exportProject({
       ffmpegPath: ffmpegPath || DEFAULT_FFMPEG,
       ffprobePath: ffprobePath || DEFAULT_FFPROBE,
       project, outputFile, workDir, onEvent: send,
-    });
+    }));
+    const out = await run;
     return { ok: true, outputFile: out };
   } catch (err) {
     if (!existed && outputFile) { try { fs.rmSync(outputFile, { force: true }); } catch (_) {} }

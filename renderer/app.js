@@ -670,6 +670,7 @@ function refreshAllBins() { BIN_KEYS.forEach((k) => refreshBin(k)); }
 
 // Re-scan whatever folders are currently open (used by the file watcher).
 function refreshLoadedBins() {
+  keyCache.clear(); // a watched file may have been replaced in place
   for (const key of BIN_KEYS) {
     const bin = state.bins[key];
     if (!bin.cwd) continue;
@@ -2114,11 +2115,12 @@ function commit(label) {
 }
 function applySnapshot(s) {
   noteEditing(); // undo/redo are edits too
-  const d = JSON.parse(s);
-  state.timeline = d.timeline || [];
-  state.soundboard = d.soundboard || [];
-  state.hybrid = d.hybrid || [];
-  state.markers = d.markers || [];
+  const d = TimelineOps.restoreDocument(s);
+  state.timeline = d.timeline;
+  state.soundboard = d.soundboard;
+  state.hybrid = d.hybrid;
+  state.markers = d.markers;
+  state.effects = d.effects;
   drag = null;
   clearSelection();
   renderTimeline();
@@ -3687,6 +3689,15 @@ async function doExport() {
   const def = rem || (state.settings.outputDir ? state.settings.outputDir + sep : '') + `merged_${timestamp()}.mp4`;
   const outFile = await api.saveOutputDialog(def);
   if (!outFile) return;
+  const conflict = TimelineOps.sourceConflict(outFile, {
+    timeline: state.timeline, hybrid: state.hybrid, soundboard: state.soundboard,
+  });
+  if (conflict) {
+    setStatus('Cannot export over a source clip: ' + conflict);
+    alert('That export path is one of the files on the timeline:\n\n'
+      + conflict + '\n\nChoose a different output name.');
+    return;
+  }
   try { localStorage.setItem(sticker, outFile); } catch (_) {}
   state.settings.outputDir = outFile.slice(0, Math.max(outFile.lastIndexOf('\\'), outFile.lastIndexOf('/')));
 
@@ -3848,14 +3859,24 @@ function markSaved() { savedSig = docSig(); lastSaveAt = Date.now(); updateSaveA
 
 async function saveProject(asNew) {
   const data = projectData();
-  if (asNew || !state.projectFile) {
-    const f = await api.saveProjectAs(data);
-    if (!f) return false; // Save-As cancelled: keep any pending confirm open
-    state.projectFile = f;
-    setStatus('Project saved: ' + f);
-  } else {
-    await api.saveProject({ file: state.projectFile, data });
-    setStatus('Project saved.');
+  try {
+    if (asNew || !state.projectFile) {
+      const res = await api.saveProjectAs(data);
+      if (!res) return false; // Save-As cancelled: keep any pending confirm open
+      if (res.ok === false) throw new Error(res.error || 'Save failed');
+      state.projectFile = res.file;
+      setStatus('Project saved: ' + res.file);
+    } else {
+      const res = await api.saveProject({ file: state.projectFile, data });
+      if (res && res.ok === false) throw new Error(res.error || 'Save failed');
+      setStatus('Project saved.');
+    }
+  } catch (e) {
+    const msg = String(e && e.message ? e.message : e);
+    setStatus('Save failed: ' + msg);
+    toast('Could not save project', { ding: true, danger: true });
+    console.error('SAVE_ERR', e);
+    return false;
   }
   markSaved();
   return true;
@@ -3990,9 +4011,12 @@ function confirmUnsavedChanges() {
     };
     const onSave = async () => {
       save.disabled = true;
-      const ok = await saveProject(false);
-      save.disabled = false;
-      if (ok) finish(true); // Save-As cancelled -> keep the prompt open
+      try {
+        const ok = await saveProject(false);
+        if (ok) finish(true); // Save-As cancelled -> keep the prompt open
+      } finally {
+        save.disabled = false;
+      }
     };
     const onDiscard = () => finish(true);
     const onCancel = () => finish(false);
@@ -4099,7 +4123,8 @@ function scheduleAutoSave() {
 async function autoSaveTick() {
   if (!isDirty() || !state.projectFile) return; // never pop a Save-As dialog here
   try {
-    await api.saveProject({ file: state.projectFile, data: projectData() });
+    const res = await api.saveProject({ file: state.projectFile, data: projectData() });
+    if (res && res.ok === false) throw new Error(res.error || 'Auto-save failed');
     markSaved();
     setStatus('Auto-saved ' + new Date().toLocaleTimeString());
   } catch (_) { /* ignore */ }
@@ -4613,7 +4638,16 @@ function wireEvents() {
   setInterval(saveReminderTick, 60000);   // nag about unsaved work (every 10 min)
 
   // Main asks us to close: we own the unsaved-changes prompt, then reply.
-  if (api.onRequestClose) api.onRequestClose(async () => api.closeConfirm(await confirmUnsavedChanges()));
+  if (api.onRequestClose) api.onRequestClose(async () => {
+    const safe = await confirmUnsavedChanges();
+    if (!safe) { api.closeConfirm(false); return; }
+    if (state.exporting) {
+      const quit = confirm('An export is still running. Cancel it and quit?');
+      if (!quit) { api.closeConfirm(false); return; }
+      setStatus('Cancelling export…');
+    }
+    api.closeConfirm(true);
+  });
 
   api.onPreviewDone((p) => {
     if (p && p.original && p.file) { previewProxy.set(p.original, p.file); onProxyReady(p.original); }
