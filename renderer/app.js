@@ -2455,6 +2455,7 @@ function updateToolbar() {
   const zbg = $('#btn-zoom-bg');
   if (ease) { ease.disabled = !selZoom; ease.textContent = selZoom && selEff.ease === 'linear' ? 'Linear' : 'Smooth'; }
   if (zbg) { zbg.disabled = !selZoom; zbg.textContent = selZoom && selEff.bg === 'blur' ? 'Blur BG' : 'Black BG'; }
+  syncZoomLevelControls();
   const shAmp = $('#shake-amp');
   const shNum = $('#shake-amp-num');
   const shPct = selShake ? String(Math.round(selEff.amp * 1000) / 10) : '4';
@@ -2756,11 +2757,16 @@ function updatePreviewZoomTransform() {
   const stage = document.querySelector('.preview-stage');
   const r = stage ? stage.getBoundingClientRect() : { width: el.clientWidth || 1, height: el.clientHeight || 1 };
   const Wd = Math.max(1, r.width), Hd = Math.max(1, r.height);
-  const tx = Wd / 2 - pose.cx * Wd * pose.z;
-  const ty = Hd / 2 - pose.cy * Hd * pose.z;
   for (const n of targets) {
+    // A "fill & crop" picture fills the box, so its content rect IS the box; a
+    // "whole frame" picture is letterboxed at its own ratio. Feeding the right
+    // rect keeps the zoom centre identical to the exporter's overlay maths.
+    const iw = n.naturalWidth || n.videoWidth || 0;
+    const ih = n.naturalHeight || n.videoHeight || 0;
+    const ar = n.style.objectFit === 'cover' || !(iw > 0 && ih > 0) ? Wd / Hd : iw / ih;
+    const t = TimelineOps.framingZoomTransform(pose, Wd, Hd, ar);
     n.style.transformOrigin = '0 0';
-    n.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) scale(${pose.z})`;
+    n.style.transform = `translate(${t.tx.toFixed(2)}px, ${t.ty.toFixed(2)}px) scale(${pose.z})`;
   }
   const editing = state.viewer.mode === 'program' && soleSelectedEffect();
   if (editing && cross && hud) {
@@ -2831,6 +2837,16 @@ function zoomEditTouch(label) {
     renderTimeline();
     updateToolbar();
   }, 450);
+}
+
+// Reflect the zoom of the pose being edited on the FX panel's slider + % box.
+function syncZoomLevelControls() {
+  const pose = editTargetPose();
+  const pct = pose ? String(Math.round(pose.z * 1000) / 10) : '100';
+  const range = $('#zoom-level');
+  const num = $('#zoom-level-num');
+  if (range) { range.disabled = !pose; if (pose) range.value = pct; }
+  if (num) { num.disabled = !pose; if (pose && document.activeElement !== num) num.value = pct; }
 }
 
 /* ---- Effect creation / rendering ----------------------------------------- */
@@ -3004,9 +3020,11 @@ function syncActiveMute() {
   const stillImg = $('#preview-still');
   const stillBg = $('#preview-bg-still');
   const image = !!(item && isImageItem(item));
-  const camPose = cameraPoseAt(previewPoseTime());
   const gov = governingEffectAt(previewPoseTime());
-  const camActive = gov && (Math.abs(camPose.z - 1) > 1e-6 || Math.abs(camPose.cx - 0.5) > 1e-6 || Math.abs(camPose.cy - 0.5) > 1e-6);
+  // What shows outside the picture: "whole frame" always keeps its blurred
+  // fill (so an effect can never change the framing on its first frame); a
+  // "fill & crop" clip asks the effect for a blur backdrop, else it stays black.
+  const backdrop = fit === 'blur' || !!(gov && gov.bg === 'blur');
 
   if (image) {
     // A still has no video element to play. Show the centered image (plus a
@@ -3015,15 +3033,20 @@ function syncActiveMute() {
     if (stillImg) {
       if (stillImg.dataset.path !== url) { stillImg.dataset.path = url; stillImg.src = url; }
       stillImg.classList.remove('hidden');
-      stillImg.style.objectFit = (camActive || fit === 'cover') ? 'cover' : 'contain';
+      // The framing decides the base; an active zoom only magnifies it.
+      stillImg.style.objectFit = fit === 'cover' ? 'cover' : 'contain';
     }
+    // A still has no video element, so the "timeline empty" notice would
+    // otherwise stay on top of it (it is only cleared when a video loads).
+    const empty = $('#preview-empty');
+    if (empty) empty.classList.add('hidden');
     if (stillBg) {
       if (stillBg.dataset.path !== url) { stillBg.dataset.path = url; stillBg.src = url; }
-      stillBg.classList.toggle('hidden', !(fit === 'blur' || (gov && gov.bg === 'blur' && camPose.z < 1)));
+      stillBg.classList.toggle('hidden', !backdrop);
     }
     el.classList.add('hidden');
     try { el.pause(); } catch (_) {}
-    if (program) program.classList.remove('bg-on');
+    if (program) program.classList.toggle('bg-on', backdrop);
     if (bg) { try { bg.pause(); } catch (_) {} bg.removeAttribute('src'); }
     el.muted = true;
     setMediaGain(el, -120);
@@ -3036,41 +3059,23 @@ function syncActiveMute() {
   if (stillBg) stillBg.classList.add('hidden');
   el.classList.remove('hidden');
   el.muted = !!(item && item.mute);
-  if (fit === 'cover') {
-    el.style.objectFit = 'cover';
-    if (program) program.classList.remove('bg-on');
-    if (bg) { try { bg.pause(); } catch (_) {} bg.removeAttribute('src'); bg.currentTime = 0; }
-  } else {
-    el.style.objectFit = 'contain';
-    if (program) program.classList.add('bg-on');
-    if (bg) {
+  el.style.objectFit = fit === 'cover' ? 'cover' : 'contain';
+  if (program) program.classList.toggle('bg-on', backdrop);
+  if (bg) {
+    if (backdrop) {
       const url = el.currentSrc || el.src || '';
       if (bg.getAttribute('src') !== url && url) { bg.currentTime = 0; bg.src = url; }
       try { bg.currentTime = el.currentTime; } catch (_) {}
       if (!el.paused) bg.play().catch(() => {});
+    } else {
+      try { bg.pause(); } catch (_) {}
+      bg.removeAttribute('src');
+      try { bg.currentTime = 0; } catch (_) {}
     }
   }
   // Audio: active element plays at the clip's dB (mute → silence); standby silent.
   setMediaGain(el, (item && item.mute) ? -120 : (item ? (item.volume || 0) : 0));
   setMediaGain($('#preview-b'), -120);
-  // Camera effect: force the "fill & crop" base so the preview frame equals the
-  // export frame, and show the effect's background when the pose is below 100%.
-  if (camActive) {
-    el.style.objectFit = 'cover';
-    if (program) {
-      if (gov.bg === 'blur' && camPose.z < 1) {
-        program.classList.add('bg-on');
-        if (bg) {
-          const url = el.currentSrc || el.src || '';
-          if (bg.getAttribute('src') !== url && url) { bg.currentTime = 0; bg.src = url; }
-          try { bg.currentTime = el.currentTime; } catch (_) {}
-          if (!el.paused) bg.play().catch(() => {});
-        }
-      } else {
-        program.classList.remove('bg-on');
-      }
-    }
-  }
   updatePreviewZoomTransform();
 }
 
@@ -4915,6 +4920,13 @@ function wireEvents() {
   // Effect editing on the preview stage: wheel sets the zoom of the pose being
   // edited (Start/End), drag pans it 1:1. Active when an effect is selected.
   const zoomStage = document.querySelector('.preview-stage');
+  // A picture's aspect ratio is only known once it loads; refresh the zoom
+  // transform then so an effect's first frame is not placed with the fallback
+  // (whole-box) rect.
+  const stillEl = $('#preview-still');
+  if (stillEl) stillEl.addEventListener('load', () => updatePreviewZoomTransform());
+  const previewEl = $('#preview');
+  if (previewEl) previewEl.addEventListener('loadedmetadata', () => updatePreviewZoomTransform());
   if (zoomStage) {
     zoomStage.addEventListener('wheel', (e) => {
       const eff = soleSelectedEffect();
@@ -4922,8 +4934,11 @@ function wireEvents() {
       const pose = editTargetPose();
       if (!pose) return;
       e.preventDefault();
-      const step = e.shiftKey ? 0.01 : 0.05;
-      pose.z = Math.round(clamp(pose.z + (e.deltaY < 0 ? step : -step), 0.25, 4) * 100) / 100;
+      // Multiplicative steps feel the same at 20% and at 600%; Shift is fine.
+      const factor = e.shiftKey ? 1.02 : 1.1;
+      pose.z = TimelineOps.clampZoom(Math.round(pose.z * (e.deltaY < 0 ? factor : 1 / factor) * 1000) / 1000);
+      if (Math.abs(pose.z - 1) < 0.02) pose.z = 1; // snap to 100%
+      syncZoomLevelControls();
       zoomEditTouch('Effect zoom');
       updatePreviewZoomTransform();
     }, { passive: false });
@@ -4947,6 +4962,7 @@ function wireEvents() {
       commit('Reset effect pose');
       renderTimeline();
       updatePreviewZoomTransform();
+      syncZoomLevelControls();
       updateToolbar();
       setStatus(state.effectPose === 'from' ? 'Start pose reset to whole frame.' : 'End pose reset to whole frame.');
     });
@@ -4995,6 +5011,7 @@ function wireEvents() {
     const t = state.effectPose === 'from' ? eff.start : Math.max(eff.start, effectEnd(eff) - 1e-3);
     seekPreview(t);
     updatePreviewZoomTransform();
+    syncZoomLevelControls();
     setStatus(state.effectPose === 'from' ? 'Editing the Start pose.' : 'Editing the End pose.');
   });
   $('#btn-zoom-ease').addEventListener('click', () => {
@@ -5059,6 +5076,47 @@ function wireEvents() {
   }
   if (shNumEl) {
     shNumEl.addEventListener('change', (e) => setShakeAmp(e.target.value, true));
+  }
+
+  // Effect zoom: slider + % box edit the Start or End pose (whichever the FX
+  // selector points at), live preview, debounced commit.
+  const zLevEl = $('#zoom-level');
+  const zNumEl = $('#zoom-level-num');
+  let zoomLevelSnapPending = false;
+  let zoomLevelTimer = 0;
+  function setZoomLevel(percent, immediate) {
+    const pose = editTargetPose();
+    if (!pose) return;
+    const eff = soleSelectedEffect();
+    if (eff) {
+      const s = eff.start || 0;
+      const e = s + Math.max(0, eff.dur || 0);
+      if (state.playhead < s - 1e-6 || state.playhead >= e - 1e-6) {
+        seekPreview(clamp(state.playhead, s, Math.max(s, e - 1e-4)));
+      }
+    }
+    if (!zoomLevelSnapPending) { snapshot(); zoomLevelSnapPending = true; }
+    const v = clamp(Number(percent) || 100, TimelineOps.ZOOM_MIN * 100, TimelineOps.ZOOM_MAX * 100);
+    pose.z = Math.round(v * 10) / 1000;
+    if (zLevEl) zLevEl.value = String(v);
+    if (zNumEl) zNumEl.value = String(v);
+    updatePreviewZoomTransform();
+    clearTimeout(zoomLevelTimer);
+    const finish = () => {
+      zoomLevelSnapPending = false;
+      commit(`Zoom ${Math.round(pose.z * 1000) / 10}%`);
+      renderTimeline();
+      updateToolbar();
+    };
+    if (immediate) finish();
+    else zoomLevelTimer = setTimeout(finish, 400);
+  }
+  if (zLevEl) {
+    zLevEl.addEventListener('input', (e) => setZoomLevel(e.target.value, false));
+    zLevEl.addEventListener('change', (e) => setZoomLevel(e.target.value, true));
+  }
+  if (zNumEl) {
+    zNumEl.addEventListener('change', (e) => setZoomLevel(e.target.value, true));
   }
 
   // Volume applies live while dragging (input) and commits once on release

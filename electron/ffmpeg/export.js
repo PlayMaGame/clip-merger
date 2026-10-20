@@ -323,23 +323,30 @@ function cutArgs(src, inPoint, outPoint, cfg) {
   if (mode === 'reencode') {
     if (camera) {
       // Animated camera (zoom + pan) driven by effect-layer expressions in `t`.
-      // Normalize to W:H first, then scale by z(t) and overlay at the centre
-      // point (cx(t),cy(t)); black or blurred background shows when z < 1.
+      // The base picture follows the clip's framing — `blur` fits the whole
+      // picture with a blurred cover behind it, anything else fills & crops —
+      // so at z=1 the frame is exactly the no-effect frame and the zoom only
+      // magnifies it. `camera.bg` picks the backdrop revealed when the picture
+      // is smaller than the frame.
       const pre = slow ? `setpts=PTS/${speed},` : '';
-      const base = `${pre}fps=${FPS},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1`;
       const zE = camera.z, cxE = camera.cx, cyE = camera.cy;
-      const sc = `scale=w='trunc(iw*(${zE})/2)*2':h='trunc(ih*(${zE})/2)*2':eval=frame`;
+      // The 2px floor keeps a hand-edited tiny z from rounding the frame to 0.
+      const sc = `scale=w='trunc(max(2,iw*(${zE}))/2)*2':h='trunc(max(2,ih*(${zE}))/2)*2':eval=frame`;
       const ov = `overlay=x='W/2-(${cxE})*w':y='H/2-(${cyE})*h'`;
-      if (camera.bg === 'blur') {
+      const fgBase = blur
+        ? `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1`
+        : `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1`;
+      if (blur || camera.bg === 'blur') {
+        // Blurred cover of the source stays put behind the scaled picture.
         a.push('-filter_complex',
-          `[0:v]${base},split=2[bb][f];` +
-          `[bb]boxblur=20:5[bg];` +
-          `[f]${sc}[fg];` +
+          `[0:v]${pre}fps=${FPS},split=2[fg0][bg0];` +
+          `[bg0]scale=${W}:${H}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${W}:${H},boxblur=20:5[bg];` +
+          `[fg0]${fgBase},${sc}[fg];` +
           `[bg][fg]${ov},setsar=1[v]`);
       } else {
         a.push('-filter_complex',
           `color=black:s=${W}x${H}:r=${FPS}[bg];` +
-          `[0:v]${base},${sc}[fg];` +
+          `[0:v]${pre}fps=${FPS},${fgBase},${sc}[fg];` +
           `[bg][fg]${ov}:shortest=1,setsar=1[v]`);
       }
       vmap = '[v]';

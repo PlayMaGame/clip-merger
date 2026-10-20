@@ -9,6 +9,12 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 - **Mic recorder is now a single-lane editor with the main jog bar.** The ALT lane is
   gone; the editor has one MAIN lane plus the same start / prev cut / next cut / end
   shuttle bar as the main timeline. Save writes that one take as a 48 kHz mono WAV.
+- **A Zoom effect magnifies the clip's framing instead of replacing it.** The preview
+  switched a "whole frame + blurred background" clip to fill & crop the moment the pose
+  left 100%, so the picture lost its margins on the effect's first frame; the exporter
+  always cover-cropped the camera base. Both now start from the clip's Framing — blur
+  keeps the letterbox, fill & crop stays cropped — and the zoom only magnifies it, so a
+  zoom-in begins exactly on the framed picture and ends zoomed in.
 
 ### Fixed
 - **Waveforms stay locked to the ruler.** A take dragged past the edge of the view used
@@ -32,8 +38,18 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
   (up to 8×) before drawing; quiet recordings fill the lane. Audio data is unchanged.
 - **Space always plays/pauses in the mic editor**, even when a toolbar button still
   has focus; **R** now toggles recording.
+- **An image's blurred backdrop is visible.** The still element painted an opaque black
+  box over its own blur copy, so "whole frame + blurred background" showed black bars in
+  the preview while the export rendered blurred ones. An image-only timeline also kept
+  the "Timeline empty" notice on top of the picture.
+- **Export keeps the framing inside the zoom.** The camera filter no longer forces
+  `increase,crop` on every zoomed clip, and very small zoom levels can't produce a
+  zero-width scale.
 
 ### Added
+- **Zoom slider and % box in the FX panel.** Pick Start or End pose, then set the zoom
+  with the slider or by typing a percentage (5%–800%); the wheel over the preview zooms
+  with coarse steps (Shift = fine) and snaps back to 100%. Poses still undo/redo.
 - **Double-click to delete or close gaps.** Double-click a take to delete it, or a gap
   to ripple later takes left and close it.
 

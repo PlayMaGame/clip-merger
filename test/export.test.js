@@ -273,7 +273,7 @@ test('cutArgs camera builds an animated scale + centre overlay graph', () => {
     W: 540, H: 960, FPS: 30, normalize: false, mute: false, speed: 1, fit: 'cover', volumeDb: 0, camera: cam,
   });
   const fc = args[args.indexOf('-filter_complex') + 1];
-  assert.match(fc, /scale=w='trunc\(iw\*\(/);
+  assert.match(fc, /scale=w='trunc\(max\(2,iw\*\(/);
   assert.match(fc, /eval=frame/);
   assert.match(fc, /overlay=x='W\/2-\(/);
   assert.ok(args.includes('[v]'));
@@ -290,6 +290,60 @@ test('cameraActive: true only where an effect band intersects', () => {
   const eff = [{ type: 'shake', start: 1, dur: 1 }];
   assert.equal(cameraActive(eff, 0, 5), true);   // overlaps
   assert.equal(cameraActive(eff, 3, 4), false);  // fully outside
+});
+
+test('cutArgs camera keeps the whole frame for "whole frame + blur" framing', () => {
+  // The bug: a zoom effect always cover-cropped the source, so adding one
+  // re-framed the clip. The letterboxed base keeps the picture whole.
+  const eff = [{ start: 0, dur: 2, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 1.5, cx: 0.5, cy: 0.5 }, ease: 'smooth' }];
+  const cam = buildCameraExprs(eff, 0, 2, 'black');
+  const args = cutArgs('in.mp4', 0, 2, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: [],
+    W: 540, H: 960, FPS: 30, normalize: false, mute: false, speed: 1, fit: 'blur', volumeDb: 0, camera: cam,
+  });
+  const fc = args[args.indexOf('-filter_complex') + 1];
+  // Foreground: whole picture letterboxed, then scaled by z(t).
+  assert.match(fc, /\[fg0\]scale=540:960:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,scale=w='trunc\(max\(2,iw\*\(/);
+  // Backdrop: a blurred cover of the source, not scaled with the picture.
+  assert.match(fc, /\[bg0\]scale=540:960:force_original_aspect_ratio=increase:force_divisible_by=2,crop=540:960,boxblur=20:5\[bg\]/);
+  assert.doesNotMatch(fc, /color=black/);
+});
+
+test('cutArgs camera crops the base for "fill & crop" framing', () => {
+  const eff = [{ start: 0, dur: 2, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 1.5, cx: 0.5, cy: 0.5 }, ease: 'smooth' }];
+  const cam = buildCameraExprs(eff, 0, 2, 'black');
+  const args = cutArgs('in.mp4', 0, 2, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: [],
+    W: 540, H: 960, FPS: 30, normalize: false, mute: false, speed: 1, fit: 'cover', volumeDb: 0, camera: cam,
+  });
+  const fc = args[args.indexOf('-filter_complex') + 1];
+  assert.match(fc, /scale=540:960:force_original_aspect_ratio=increase,crop=540:960,setsar=1,scale=w='trunc\(max\(2,iw\*\(/);
+  assert.match(fc, /color=black:s=540x960/);
+});
+
+test('cutArgs camera uses the blurred backdrop for "whole frame" framing even with a black-bg effect', () => {
+  // Framing owns the base look: adding a zoom must not swap the blurred bars
+  // for black ones on the first frame.
+  const eff = [{ start: 0, dur: 2, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 1.5, cx: 0.5, cy: 0.5 }, ease: 'smooth' }];
+  const cam = buildCameraExprs(eff, 0, 2, 'black');
+  assert.equal(cam.bg, 'black');
+  const args = cutArgs('in.mp4', 0, 2, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: [],
+    W: 540, H: 960, FPS: 30, normalize: false, mute: false, speed: 1, fit: 'blur', volumeDb: 0, camera: cam,
+  });
+  const fc = args[args.indexOf('-filter_complex') + 1];
+  assert.match(fc, /boxblur=20:5/);
+  assert.doesNotMatch(fc, /color=black/);
+});
+
+test('cutArgs camera floors the zoom scale so a tiny z cannot collapse the frame', () => {
+  const cam = { z: '0.001', cx: '0.5', cy: '0.5', bg: 'black' };
+  const args = cutArgs('in.mp4', 0, 2, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: [],
+    W: 540, H: 960, FPS: 30, normalize: false, mute: false, speed: 1, fit: 'cover', volumeDb: 0, camera: cam,
+  });
+  const fc = args[args.indexOf('-filter_complex') + 1];
+  assert.match(fc, /trunc\(max\(2,iw\*\(0\.001\)\)\/2\)\*2/);
 });
 
 test('cutArgs camera applies a shake as an offset', () => {

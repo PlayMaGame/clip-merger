@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
+const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
 
 const clip = (start, dur) => ({ id: `c${start}`, start, srcStart: 0, srcEnd: dur, speed: 1 });
 const hybClip = (start, dur) => ({ id: `h${start}`, kind: 'clip', start, srcStart: 0, srcEnd: dur, speed: 1 });
@@ -321,4 +321,69 @@ test('isStill recognizes images, freezes, and explicit still flags', () => {
   assert.equal(isStill({ still: true, kind: 'clip' }), true);
   assert.equal(isStill({ kind: 'video' }), false);
   assert.equal(isStill(null), false);
+});
+
+test('fitRect fits a source into the box and keeps its aspect ratio', () => {
+  // 16:9 source in a 9:16 box: width-limited, bars top and bottom.
+  assert.deepEqual(fitRect(1080, 1920, 16 / 9), { w: 1080, h: 607.5 });
+  // 9:16 source: fills the box exactly.
+  assert.deepEqual(fitRect(1080, 1920, 9 / 16), { w: 1080, h: 1920 });
+  // 1:1 source: width-limited.
+  assert.deepEqual(fitRect(1080, 1920, 1), { w: 1080, h: 1080 });
+  // A source taller than the box (e.g. 1:3): height-limited.
+  assert.deepEqual(fitRect(1080, 1920, 1 / 3), { w: 640, h: 1920 });
+  // Unknown ratio (metadata not loaded) = the whole box, like `cover`.
+  assert.deepEqual(fitRect(1080, 1920, 0), { w: 1080, h: 1920 });
+  assert.deepEqual(fitRect(1080, 1920, NaN), { w: 1080, h: 1920 });
+});
+
+test('framingZoomTransform is the identity at z=1 centred, for any aspect ratio', () => {
+  const pose = { z: 1, cx: 0.5, cy: 0.5 };
+  for (const ar of [9 / 16, 16 / 9, 1, 1 / 3, 0]) {
+    const t = framingZoomTransform(pose, 1080, 1920, ar);
+    assert.ok(Math.abs(t.tx) < 1e-9, `tx ${t.tx} for ar ${ar}`);
+    assert.ok(Math.abs(t.ty) < 1e-9, `ty ${t.ty} for ar ${ar}`);
+  }
+});
+
+test('framingZoomTransform reduces to the old formula when the picture fills the box', () => {
+  // This is the `cover` case: the content rect is the whole stage.
+  const ar = 9 / 16; // equals 1080/1920 -> fitRect = the box
+  for (const z of [0.5, 1.4, 4]) {
+    for (const [cx, cy] of [[0.5, 0.5], [0.2, 0.8]]) {
+      const t = framingZoomTransform({ z, cx, cy }, 1080, 1920, ar);
+      assert.ok(Math.abs(t.tx - (1080 / 2 - cx * 1080 * z)) < 1e-9);
+      assert.ok(Math.abs(t.ty - (1920 / 2 - cy * 1920 * z)) < 1e-9);
+    }
+  }
+});
+
+test('framingZoomTransform puts the pose centre at the frame centre (letterboxed)', () => {
+  const W = 1080, H = 1920;
+  const ar = 16 / 9;
+  for (const z of [0.3, 1, 1.4, 6]) {
+    for (const [cx, cy] of [[0.5, 0.5], [0.25, 0.75], [1, 0]]) {
+      const pose = { z, cx, cy };
+      const t = framingZoomTransform(pose, W, H, ar);
+      // The element point under the pose centre is the content origin plus the
+      // fraction of the content size; translate+scale (origin 0 0) maps it to
+      // the stage centre, exactly where the exporter's overlay puts it.
+      const ox = (W - t.w) / 2, oy = (H - t.h) / 2;
+      const px = ox + cx * t.w, py = oy + cy * t.h;
+      assert.ok(Math.abs(t.tx + z * px - W / 2) < 1e-9, `x z=${z} cx=${cx}`);
+      assert.ok(Math.abs(t.ty + z * py - H / 2) < 1e-9, `y z=${z} cy=${cy}`);
+    }
+  }
+});
+
+test('clampZoom keeps the effect zoom inside the slider range', () => {
+  assert.equal(clampZoom(1.4), 1.4);
+  assert.equal(clampZoom(0), ZOOM_MIN);
+  assert.equal(clampZoom(-3), ZOOM_MIN);
+  assert.equal(clampZoom(999), ZOOM_MAX);
+  assert.equal(clampZoom(NaN), 1);
+  assert.equal(clampZoom(undefined), 1);
+  // Wide enough to shrink the picture to a speck and to push in hard.
+  assert.ok(ZOOM_MIN <= 0.05);
+  assert.ok(ZOOM_MAX >= 8);
 });

@@ -36,6 +36,12 @@ already matches the export size/FPS).
   Waveforms stay locked to the ruler while you scroll, jog or play, and playback always
   starts at the take's real in-point. Save writes one 48 kHz mono WAV under
   Sounds → **Mic Record**; takes are not auto-added.
+- **Camera effects** (Effects bin: drag onto a clip or double-click the card): **zoom
+  in/out** and **shake**. Pick **Start** or **End** pose, then set the zoom with the FX
+  panel slider or by typing a percentage (5%–800%); drag the picture to move the centre,
+  double-click the preview to reset the pose, and the wheel zooms (Shift = fine). A zoom
+  always magnifies the clip's **Framing** — "whole frame + blurred background" keeps its
+  margins, "fill & crop" stays cropped — in the preview and in the export.
 - **Favorites**: right-click any bin item (including effects) to rate it 1–5 stars, clear
   the rating, or reveal it in Explorer. Favorites sort above unstarred items and persist
   per path in the app's user data folder.

@@ -247,6 +247,45 @@
     return { z, cx: ux, cy: uy };
   }
 
+  // ---- Framing-aware zoom maths -------------------------------------------
+  // The effect zoom is a multiplier on top of the clip's Framing: `cover` fills
+  // the frame, `blur` fits the whole picture and fills the bars with a blurred
+  // copy. Keeping the base separate from the zoom means a zoom effect never
+  // crops the picture, and its first frame (z=1) is exactly the no-effect frame.
+  const ZOOM_MIN = 0.05;
+  const ZOOM_MAX = 8;
+  function clampZoom(z) {
+    const v = Number(z);
+    if (!isFinite(v)) return 1;
+    return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v));
+  }
+
+  // Size of a source with aspect ratio `ar` (width/height) fitted whole inside a
+  // W×H box (object-fit: contain). Unknown ratio (metadata not loaded) = the
+  // full box, which is also the `cover` picture's size.
+  function fitRect(W, H, ar) {
+    if (!(ar > 0) || !(W > 0) || !(H > 0)) return { w: W, h: H };
+    const h = W / ar;
+    return h <= H ? { w: W, h } : { w: H * ar, h: H };
+  }
+
+  // CSS transform (with transform-origin at the element's 0 0) that scales the
+  // fitted picture by z about the frame centre and puts its point (cx,cy)
+  // there — the same centre-point model the exporter uses for its scaled
+  // overlay. Identity at z=1, cx=cy=0.5; with a picture that fills the box it
+  // reduces to the old `translate(W/2 - cx*W*z) scale(z)`.
+  function framingZoomTransform(pose, W, H, ar) {
+    const z = pose && pose.z > 0 ? pose.z : 1;
+    const cx = pose ? pose.cx : 0.5;
+    const cy = pose ? pose.cy : 0.5;
+    const { w, h } = fitRect(W, H, ar);
+    return {
+      w, h,
+      tx: W / 2 - (z * (W - w)) / 2 - z * cx * w,
+      ty: H / 2 - (z * (H - h)) / 2 - z * cy * h,
+    };
+  }
+
   // Restore a history snapshot into the document shape. Every lane that
   // snapshotDoc captures must be restored here — keeping this pure makes the
   // "undo must restore effects too" contract unit-testable.
@@ -268,7 +307,7 @@
     return !!(item && (item.still === true || item.kind === 'image' || item.kind === 'freeze'));
   }
 
-  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, sourceConflict, restoreDocument, isStill };
+  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, sourceConflict, restoreDocument, isStill };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TimelineOps = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

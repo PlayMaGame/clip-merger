@@ -317,6 +317,7 @@ button > .icon, .bin-toggle > .icon { pointer-events: none; }
 /* With a blurred backdrop, let it show through the foreground's letterbox/zoom
    padding instead of the foreground's own black fill. */
 #viewer-program.bg-on #preview { background: transparent; }
+#viewer-program.bg-on #preview-still { background: transparent; }
 #preview-b { visibility: hidden; z-index: 1; }
 #preview { visibility: visible; z-index: 2; }
 #preview-media { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; background: #000; }
@@ -741,10 +742,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* Per-effect tools: only the panel for the selected effect's type is shown. */
 .fx-sub { display: flex; align-items: center; gap: 6px; }
-.tl-shake { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
-.tl-shake input[type="range"] { width: 110px; accent-color: var(--accent); cursor: pointer; }
-.tl-shake input[type="range"]:disabled { opacity: .45; cursor: default; }
-.tl-shake input[type="number"] { width: 56px; }
+.tl-shake, .tl-zoom-level { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.tl-shake input[type="range"], .tl-zoom-level input[type="range"] { width: 110px; accent-color: var(--accent); cursor: pointer; }
+.tl-shake input[type="range"]:disabled, .tl-zoom-level input[type="range"]:disabled { opacity: .45; cursor: default; }
+.tl-shake input[type="number"], .tl-zoom-level input[type="number"] { width: 56px; }
 
 /* Zoom band drawn inside a clip; two handles retime the animation. Handles sit
    in the top strip so they never fight the trim edges along the bottom. */
