@@ -742,6 +742,35 @@ function closeContextMenu() {
   el.innerHTML = '';
 }
 
+// A context menu of plain actions (the zoom destination, for example). Kept
+// beside openContextMenu, which the bins use for ratings.
+function openItemMenu(opts) {
+  const el = $('#ctx-menu');
+  if (!el) return;
+  el.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'ctx-title';
+  head.textContent = opts.title || '';
+  el.appendChild(head);
+  for (const item of opts.items || []) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctx-item';
+    b.textContent = item.label;
+    b.disabled = !!item.disabled;
+    b.addEventListener('click', () => { closeContextMenu(); if (item.onSelect) item.onSelect(); });
+    el.appendChild(b);
+  }
+  el.classList.remove('hidden');
+  el.style.left = '0px';
+  el.style.top = '0px';
+  const r = el.getBoundingClientRect();
+  const x = Math.max(4, Math.min(opts.x || 0, window.innerWidth - r.width - 6));
+  const y = Math.max(4, Math.min(opts.y || 0, window.innerHeight - r.height - 6));
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+
 function openContextMenu(opts) {
   const el = $('#ctx-menu');
   if (!el) return;
@@ -2833,6 +2862,79 @@ function panPoseBy(pose, dxPx, dyPx, z) {
   const zz = Math.max(0.01, z || 1);
   pose.cx = clamp(pose.cx - dxPx / (Math.max(1, r.width) * zz), 0, 1);
   pose.cy = clamp(pose.cy - dyPx / (Math.max(1, r.height) * zz), 0, 1);
+}
+
+// Park the preview on the edge of the band that the pose being edited belongs
+// to, so what you see is the pose you are setting. A wheel/drag used to leave
+// the playhead wherever it was, mid-ramp, where the pose is only partly applied.
+function parkPoseEdge(eff) {
+  if (!eff) return;
+  const t = state.effectPose === 'from' ? (eff.start || 0) : Math.max(eff.start || 0, effectEnd(eff) - 1e-4);
+  if (Math.abs(state.playhead - t) > 1e-4) seekPreview(t);
+}
+
+// Aspect ratio of the picture on the stage: a letterboxed picture uses its own
+// ratio, a fill & crop picture fills the frame.
+function stagePictureAspect(rect) {
+  const still = $('#preview-still');
+  const video = $('#preview');
+  const el = still && !still.classList.contains('hidden') ? still : video;
+  const iw = (el && (el.naturalWidth || el.videoWidth)) || 0;
+  const ih = (el && (el.naturalHeight || el.videoHeight)) || 0;
+  const Wd = Math.max(1, (rect && rect.width) || 1);
+  const Hd = Math.max(1, (rect && rect.height) || 1);
+  if (!(iw > 0 && ih > 0) || el.style.objectFit === 'cover') return Wd / Hd;
+  return iw / ih;
+}
+
+// Right-click on the preview: the picture point under the cursor becomes the
+// zoom's Start or End destination, so the ramp aims at it instead of at the
+// middle of the picture. The zoom amount stays whatever the Zoom slider says.
+function setZoomPoint(which, clientX, clientY) {
+  const eff = soleSelectedEffect();
+  if (!eff || eff.type === 'shake' || !eff.from || !eff.to) return;
+  if (state.viewer.mode !== 'program') return;
+  const stage = document.querySelector('.preview-stage');
+  if (!stage) return;
+  state.effectPose = which === 'from' ? 'from' : 'to';
+  const edgeSel = $('#btn-eff-pose');
+  if (edgeSel) edgeSel.value = state.effectPose;
+  parkPoseEdge(eff);
+  // Measure after parking: seeking can resize the stage (the FX row enables its
+  // slider on a selection), and a stale rect would shift the point by a pixel.
+  const r = stage.getBoundingClientRect();
+  const target = state.effectPose === 'from' ? eff.from : eff.to;
+  const pt = TimelineOps.screenToPicture(
+    target, Math.max(1, r.width), Math.max(1, r.height), stagePictureAspect(r),
+    clientX - r.left, clientY - r.top,
+  );
+  snapshot();
+  target.cx = clamp(pt.cx, 0, 1);
+  target.cy = clamp(pt.cy, 0, 1);
+  commit(`Zoom ${state.effectPose === 'from' ? 'start' : 'end'} point`);
+  renderTimeline();
+  updatePreviewZoomTransform();
+  syncZoomLevelControls();
+  updateToolbar();
+  const pct = Math.round(TimelineOps.clampZoom(target.z) * 1000) / 10;
+  const edge = state.effectPose === 'from' ? 'start' : 'end';
+  if (pct <= 100.01) {
+    setStatus(`Zoom ${edge} point set — raise Zoom above 100% to see the move.`);
+  } else {
+    setStatus(`Zoom ${edge} point set at ${pct}%.`);
+  }
+}
+
+function resetZoomPoses(eff) {
+  if (!eff || !eff.from || !eff.to) return;
+  snapshot();
+  for (const p of [eff.from, eff.to]) { p.z = 1; p.cx = 0.5; p.cy = 0.5; }
+  commit('Reset effect pose');
+  renderTimeline();
+  updatePreviewZoomTransform();
+  syncZoomLevelControls();
+  updateToolbar();
+  setStatus('Zoom poses reset to the whole frame.');
 }
 
 // The pose a scroll/drag on the preview should edit ('to' = End, 'from' = Start).
@@ -4952,6 +5054,7 @@ function wireEvents() {
       const pose = editTargetPose();
       if (!pose) return;
       e.preventDefault();
+      parkPoseEdge(eff);
       // Multiplicative steps feel the same at 20% and at 600%; Shift is fine.
       const factor = e.shiftKey ? 1.02 : 1.1;
       pose.z = TimelineOps.clampZoom(Math.round(pose.z * (e.deltaY < 0 ? factor : 1 / factor) * 1000) / 1000);
@@ -4964,10 +5067,29 @@ function wireEvents() {
       if (e.button !== 0) return;
       const eff = soleSelectedEffect();
       if (!eff || eff.type === 'shake' || state.viewer.mode !== 'program') return;
+      parkPoseEdge(eff);
       drag = { type: 'zoomcenter', id: eff.id, lastX: e.clientX, lastY: e.clientY };
       snapshot();
       try { zoomStage.setPointerCapture(e.pointerId); } catch (_) {}
       e.preventDefault();
+    });
+    // Right-click: aim the zoom at a point of the picture. Only offered when a
+    // zoom effect is selected, because that is what owns the pose being edited.
+    zoomStage.addEventListener('contextmenu', (e) => {
+      const eff = soleSelectedEffect();
+      if (!eff || eff.type === 'shake' || !eff.from || !eff.to) return;
+      if (state.viewer.mode !== 'program') return;
+      e.preventDefault();
+      openItemMenu({
+        x: e.clientX,
+        y: e.clientY,
+        title: eff.name || 'Zoom',
+        items: [
+          { label: 'End zoom point here', onSelect: () => setZoomPoint('to', e.clientX, e.clientY) },
+          { label: 'Start zoom point here', onSelect: () => setZoomPoint('from', e.clientX, e.clientY) },
+          { label: 'Reset start & end poses', onSelect: () => resetZoomPoses(eff) },
+        ],
+      });
     });
     // Double-click: reset the pose being edited to whole-frame / no zoom.
     zoomStage.addEventListener('dblclick', () => {
@@ -4975,6 +5097,7 @@ function wireEvents() {
       if (!eff || state.viewer.mode !== 'program') return;
       const pose = editTargetPose();
       if (!pose) return;
+      parkPoseEdge(eff);
       snapshot();
       pose.z = 1; pose.cx = 0.5; pose.cy = 0.5;
       commit('Reset effect pose');

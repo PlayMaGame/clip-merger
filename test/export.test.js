@@ -265,6 +265,18 @@ test('buildCameraExprs: z/cx/cy expressions in local time', () => {
   assert.equal(c.bg, 'black');
 });
 
+test('buildCameraExprs ramps the picture offset like the preview', () => {
+  // The preview interpolates z*cx (TimelineOps.rampPose). If the exporter lerps
+  // the centre instead, the zoom outruns the pan, the destination is thrown off
+  // screen mid-ramp, and the render stops matching the preview.
+  const eff = [{ start: 0, dur: 1, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 3, cx: 0.2, cy: 0.3 }, ease: 'linear' }];
+  const c = buildCameraExprs(eff, 0, 1, 'black');
+  assert.match(c.cx, /\/max\(0\.0001,/);
+  assert.match(c.cx, /\(0\.5000\+\(0\.6000-0\.5000\)/); // z*cx keys 1*0.5 -> 3*0.2
+  assert.match(c.cy, /\(0\.5000\+\(0\.9000-0\.5000\)/); // z*cy keys 1*0.5 -> 3*0.3
+  assert.doesNotMatch(c.cx, /\(0\.5000\+\(0\.2000-0\.5000\)/); // the old centre lerp
+});
+
 test('cutArgs camera builds an animated scale + centre overlay graph', () => {
   const eff = [{ start: 0, dur: 2, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 1.5, cx: 0.5, cy: 0.5 }, ease: 'smooth' }];
   const cam = buildCameraExprs(eff, 0, 2, 'black');

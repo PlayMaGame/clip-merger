@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
+const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, picturePointAt, screenToPicture, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
 
 const clip = (start, dur) => ({ id: `c${start}`, start, srcStart: 0, srcEnd: dur, speed: 1 });
 const hybClip = (start, dur) => ({ id: `h${start}`, kind: 'clip', start, srcStart: 0, srcEnd: dur, speed: 1 });
@@ -241,10 +241,15 @@ test('effectPoseAt: no effects -> identity', () => {
   assert.deepEqual(effectPoseAt([], 5), { z: 1, cx: 0.5, cy: 0.5 });
 });
 
-test('effectPoseAt: single zoom-in ramps then returns to identity after the band', () => {
+test('effectPoseAt: single zoom-in ramps pan and zoom together', () => {
   const eff = [{ start: 2, dur: 2, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 2, cx: 0.3, cy: 0.7 }, ease: 'linear' }];
   assert.deepEqual(effectPoseAt(eff, 0), { z: 1, cx: 0.5, cy: 0.5 });   // before -> identity
-  assert.deepEqual(effectPoseAt(eff, 3), { z: 1.5, cx: 0.4, cy: 0.6 }); // half way
+  // Half way the picture OFFSET (z*cx) is half way, so the centre has already
+  // moved further than a linear centre lerp would: 0.55/1.5 and 0.95/1.5.
+  const mid = effectPoseAt(eff, 3);
+  assert.ok(Math.abs(mid.z - 1.5) < 1e-9, String(mid.z));
+  assert.ok(Math.abs(mid.cx - 0.55 / 1.5) < 1e-9, String(mid.cx));
+  assert.ok(Math.abs(mid.cy - 0.95 / 1.5) < 1e-9, String(mid.cy));
   assert.deepEqual(effectPoseAt(eff, 9), { z: 1, cx: 0.5, cy: 0.5 });   // after -> identity (bounded)
 });
 
@@ -433,4 +438,59 @@ test('nextCutTarget skips a candidate that is behind the playhead', () => {
   // t sits inside the last frame of the first clip, so 1 - frame is in the past.
   const got = nextCutTarget([0, 1, 2], [1, 2], 0.99, 1, 0.5);
   assert.equal(got, 1.5);
+});
+
+test('rampPose keeps the destination on screen and lands it dead centre', () => {
+  // A hard zoom into a corner: the classic case where easing the centre and the
+  // zoom separately throws the target off screen until the last frame.
+  const e = { start: 0, dur: 3, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 8, cx: 0.15, cy: 0.85 } };
+  const W = 1080, H = 1920, ar = 16 / 9; // a 16:9 picture letterboxed in a 9:16 frame
+  let last = Infinity;
+  for (let i = 0; i <= 30; i++) {
+    const t = (i / 30) * 3;
+    const p = rampPose(e, t);
+    const at = picturePointAt(p, W, H, ar, e.to.cx, e.to.cy);
+    const dist = Math.hypot(at.x - W / 2, at.y - H / 2);
+    assert.ok(at.x >= 0 && at.x <= W && at.y >= 0 && at.y <= H, `off screen at t=${t}: ${at.x},${at.y}`);
+    assert.ok(dist <= last + 1e-9, `destination moved away from the centre at t=${t}`);
+    last = dist;
+  }
+  const end = picturePointAt(rampPose(e, 3), W, H, ar, e.to.cx, e.to.cy);
+  assert.ok(Math.abs(end.x - W / 2) < 1e-6 && Math.abs(end.y - H / 2) < 1e-6);
+  // The keys themselves are untouched.
+  const first = rampPose(e, 0);
+  assert.ok(Math.abs(first.z - 1) < 1e-12 && Math.abs(first.cx - 0.5) < 1e-12);
+});
+
+test('rampPose behaves like a plain lerp for a pure pan', () => {
+  const e = { start: 0, dur: 2, from: { z: 2, cx: 0.2, cy: 0.8 }, to: { z: 2, cx: 0.6, cy: 0.4 }, ease: 'linear' };
+  const mid = rampPose(e, 1);
+  assert.ok(Math.abs(mid.z - 2) < 1e-12);
+  assert.ok(Math.abs(mid.cx - 0.4) < 1e-12);
+  assert.ok(Math.abs(mid.cy - 0.6) < 1e-12);
+});
+
+test('screenToPicture inverts picturePointAt', () => {
+  const W = 1080, H = 1920, ar = 16 / 9;
+  const poses = [
+    { z: 1, cx: 0.5, cy: 0.5 },
+    { z: 2.5, cx: 0.2, cy: 0.75 },
+    { z: 0.4, cx: 0.9, cy: 0.1 },
+  ];
+  for (const pose of poses) {
+    for (const [cx, cy] of [[0.5, 0.5], [0.15, 0.85], [0, 1], [1, 0]]) {
+      const pt = picturePointAt(pose, W, H, ar, cx, cy);
+      const back = screenToPicture(pose, W, H, ar, pt.x, pt.y);
+      assert.ok(Math.abs(back.cx - cx) < 1e-9, `cx ${cx} -> ${back.cx}`);
+      assert.ok(Math.abs(back.cy - cy) < 1e-9, `cy ${cy} -> ${back.cy}`);
+    }
+  }
+});
+
+test('screenToPicture reports clicks outside the picture', () => {
+  const W = 1080, H = 1920, ar = 16 / 9; // picture is 1080x607.5, letterboxed
+  const top = screenToPicture({ z: 1, cx: 0.5, cy: 0.5 }, W, H, ar, W / 2, 10);
+  assert.ok(top.cy < 0, String(top.cy)); // above the picture
+  const side = screenToPicture({ z: 1, cx: 0.5, cy: 0.5 }, W, H, ar, -5, H / 2);
+  assert.ok(side.cx < 0, String(side.cx));
 });

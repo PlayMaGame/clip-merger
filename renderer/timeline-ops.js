@@ -190,6 +190,15 @@
   // bands combine: zoom multiplies, centres compose (later effect outermost).
   const IDENT = { z: 1, cx: 0.5, cy: 0.5 };
   function effEnd(e) { return (e.start || 0) + Math.max(0, e.dur || 0); }
+  // Ramp a pose between its two keys. The interpolation happens in PICTURE
+  // OFFSET space (z*cx) rather than centre space: the frame centre is always the
+  // pose's (cx,cy), so a point of the picture sitting at (px,py) is drawn at
+  // z*(px - cx) from the centre. Easing cx and z separately makes the zoom
+  // outrun the pan — a hard zoom toward a corner throws the destination off
+  // screen and only lands it on the very last frame (the "it arrives in the last
+  // second" drift Premiere/After Effects avoid by moving scale and position as
+  // one camera move). Ramping the offset keeps the destination on a straight
+  // line to the middle: its screen distance shrinks steadily to zero.
   function rampPose(e, t) {
     const a = e.start || 0;
     const span = Math.max(1e-6, e.dur || 0);
@@ -197,7 +206,15 @@
     if (p < 0) p = 0; else if (p > 1) p = 1;
     const f = e.from || IDENT, to = e.to || IDENT;
     if (e.ease !== 'linear') p = p * p * (3 - 2 * p);
-    return { z: f.z + (to.z - f.z) * p, cx: f.cx + (to.cx - f.cx) * p, cy: f.cy + (to.cy - f.cy) * p };
+    const z = f.z + (to.z - f.z) * p;
+    if (z > 1e-6) {
+      return {
+        z,
+        cx: (f.z * f.cx + (to.z * to.cx - f.z * f.cx) * p) / z,
+        cy: (f.z * f.cy + (to.z * to.cy - f.z * f.cy) * p) / z,
+      };
+    }
+    return { z, cx: f.cx + (to.cx - f.cx) * p, cy: f.cy + (to.cy - f.cy) * p };
   }
   // Deterministic camera-shake offset (shared by preview + export): a sum of
   // sines of absolute time, decaying across the band. Units are a fraction of the
@@ -286,6 +303,31 @@
     };
   }
 
+  // Where a picture point (fractions of the picture's own width/height) lands on
+  // screen under a pose. The pose's (cx,cy) is, by construction, always at the
+  // frame centre, so this is how you check that a destination stays in view.
+  function picturePointAt(pose, W, H, ar, cx, cy) {
+    const z = pose && pose.z > 0 ? pose.z : 1;
+    const { w, h } = fitRect(W, H, ar);
+    const px = pose ? pose.cx : 0.5;
+    const py = pose ? pose.cy : 0.5;
+    return { x: W / 2 + z * (cx - px) * w, y: H / 2 + z * (cy - py) * h };
+  }
+
+  // Inverse of picturePointAt / framingZoomTransform: which point of the picture
+  // sits under a screen point. Turns a right-click on the preview into a zoom
+  // destination. Values outside 0..1 mean the picture does not reach that pixel.
+  function screenToPicture(pose, W, H, ar, sx, sy) {
+    const z = pose && pose.z > 0 ? pose.z : 1;
+    const { w, h } = fitRect(W, H, ar);
+    const px = pose ? pose.cx : 0.5;
+    const py = pose ? pose.cy : 0.5;
+    return {
+      cx: w > 0 ? (sx - W / 2 + z * px * w) / (z * w) : 0.5,
+      cy: h > 0 ? (sy - H / 2 + z * py * h) / (z * h) : 0.5,
+    };
+  }
+
   // Where a cut jump (A/D) should land. Frames are half-open [start, end), so an
   // item's end boundary is already the first frame of whatever follows (the next
   // shot, or black at the end of the timeline). Landing there showed the next item
@@ -328,7 +370,7 @@
     return !!(item && (item.still === true || item.kind === 'image' || item.kind === 'freeze'));
   }
 
-  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill };
+  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, picturePointAt, screenToPicture, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TimelineOps = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -238,8 +238,13 @@ function posePiece(effects, lo, hi, T) {
     const f = e.from || IDP, to = e.to || IDP;
     const pe = peExpr(e, T);
     const zc = lerpExpr(f.z, to.z, pe);
-    const cxc = lerpExpr(f.cx, to.cx, pe);
-    const cyc = lerpExpr(f.cy, to.cy, pe);
+    // Ramp the picture offset (z*cx) exactly like TimelineOps.rampPose: easing the
+    // centre against a growing zoom throws the destination off screen mid-ramp,
+    // and the preview would no longer match this render.
+    const oxc = lerpExpr(f.z * f.cx, to.z * to.cx, pe);
+    const oyc = lerpExpr(f.z * f.cy, to.z * to.cy, pe);
+    const cxc = `(${oxc}/max(0.0001,${zc}))`;
+    const cyc = `(${oyc}/max(0.0001,${zc}))`;
     z = `(${z}*${zc})`;
     ux = `(${cxc}+(${ux}-0.5)/${zc})`;
     uy = `(${cyc}+(${uy}-0.5)/${zc})`;

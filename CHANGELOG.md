@@ -15,6 +15,12 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
   always cover-cropped the camera base. Both now start from the clip's Framing — blur
   keeps the letterbox, fill & crop stays cropped — and the zoom only magnifies it, so a
   zoom-in begins exactly on the framed picture and ends zoomed in.
+- **A zoom pans and zooms as one camera move.** The centre and the zoom were eased
+  separately, and the growing zoom multiplied the pan, so the spot you were heading for
+  flew off screen and snapped back into the middle on the last frame. The ramp now
+  interpolates the picture offset (`z·cx`), which keeps the destination on a straight
+  line to the middle and on screen the whole way (Premiere/After Effects move scale and
+  position as one pair). Pure pans animate exactly as before.
 
 ### Fixed
 - **Waveforms stay locked to the ruler.** A take dragged past the edge of the view used
@@ -55,6 +61,12 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 - **Zoom slider and % box in the FX panel.** Pick Start or End pose, then set the zoom
   with the slider or by typing a percentage (5%–800%); the wheel over the preview zooms
   with coarse steps (Shift = fine) and snaps back to 100%. Poses still undo/redo.
+- **Right-click the preview to set the zoom destination.** With a zoom effect selected,
+  right-click the spot you want to end on and choose **End zoom point here** (or **Start
+  zoom point here**, or **Reset start & end poses**). The click is mapped through the
+  current pose, so the point you picked becomes the pose's centre; the zoom amount stays
+  on the slider. The wheel, the drag and the menu now park the preview on the pose you
+  are editing, so what you see is what you set.
 - **Double-click to delete or close gaps.** Double-click a take to delete it, or a gap
   to ripple later takes left and close it.
 
