@@ -31,8 +31,10 @@ already matches the export size/FPS).
   timeline with a ruler, lane, zoom/Fit, snap, split/delete, undo/redo, a jog/shuttle
   bar (start / prev cut / next cut / end) and the main editor's shortcuts (Space, R,
   S, Del, Ctrl+Z/Y, A/D, F, Ctrl+wheel, middle-drag pan). Record punches in at the
-  playhead; drag takes to move, drag edges to trim (both directions), and double-click
-  a take to delete it or a gap to close it. Save writes one 48 kHz mono WAV under
+  playhead; drag takes to move (the view auto-scrolls near the edges), drag edges to
+  trim (both directions), and double-click a take to delete it or a gap to close it.
+  Waveforms stay locked to the ruler while you scroll, jog or play, and playback always
+  starts at the take's real in-point. Save writes one 48 kHz mono WAV under
   Sounds → **Mic Record**; takes are not auto-added.
 - **Favorites**: right-click any bin item (including effects) to rate it 1–5 stars, clear
   the rating, or reveal it in Explorer. Favorites sort above unstarred items and persist

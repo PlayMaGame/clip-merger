@@ -174,3 +174,52 @@ test('nextCut walks to the previous and next cut', () => {
   assert.equal(M.nextCut(points, 0, -1), null);
   assert.equal(M.nextCut(points, 2.5, 1), null);
 });
+
+test('timeAtX and xAt invert each other', () => {
+  const pps = 90;
+  const offset = 2.5;
+  const x = M.xAt(7, offset, pps, 38);
+  assert.equal(x, 38 + 4.5 * pps);
+  assert.ok(Math.abs(M.timeAtX(x, offset, pps, 38) - 7) < 1e-9);
+  assert.equal(M.xAt(offset, offset, pps, 38), 38); // the gutter is time zero
+});
+
+test('a visible pixel span always covers (right-left)/pps seconds', () => {
+  const pps = 90;
+  const offset = 2.5;
+  // Left edge of the viewport, a take running past the right edge, and a
+  // narrow early span - the old renderer squeezed the whole take into these.
+  for (const [left, right] of [[38, 128], [668, 700], [38, 96]]) {
+    const t0 = M.timeAtX(left, offset, pps, 38);
+    const t1 = M.timeAtX(right, offset, pps, 38);
+    assert.ok(Math.abs(t1 - t0 - (right - left) / pps) < 1e-9);
+  }
+});
+
+test('sourceOffsetAt starts playback at the take source in-point', () => {
+  const src = c(0, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(M.sourceOffsetAt(src, 0, SR), 0);
+  assert.equal(M.sourceOffsetAt(src, 0.4, SR), 0.4);
+
+  // Split, drop the head, then play the tail from the timeline start: playback
+  // must read the tail's own audio (0.4 s in), not the beginning of the take.
+  const [, tail] = M.splitClip(src, 0.4, SR, () => 'c2');
+  assert.equal(M.sourceOffsetAt(tail, 0, SR), 0.4);
+  assert.equal(M.sourceOffsetAt(tail, tail.start, SR), 0.4);
+
+  // Clamped to the audible window.
+  assert.equal(M.sourceOffsetAt(tail, 99, SR), 1);
+  assert.equal(M.sourceOffsetAt(tail, -5, SR), 0.4);
+});
+
+test('sourceOffsetAt agrees with where mixClips writes the window', () => {
+  // Sub-unity samples so mixClips' clamp cannot mask the comparison.
+  const src = c(0, [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+  const trimmed = M.trimClip(M.trimClip(src, 'l', 0.2, SR), 'r', 0.7, SR);
+  const i = Math.round(trimmed.start * SR);
+  const j = Math.round(M.sourceOffsetAt(trimmed, trimmed.start, SR) * SR);
+  assert.equal(j, 2); // source in-point, not the head of the take
+  const mixed = M.mixClips([trimmed], SR);
+  // Live playback and the saved mix must read the same sample at the same time.
+  assert.ok(Math.abs(mixed[i] - src.samples[j]) < 1e-6);
+});

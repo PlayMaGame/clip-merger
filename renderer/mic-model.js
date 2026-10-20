@@ -161,6 +161,29 @@
     return best;
   }
 
+  // Timeline pixel <-> time. The mini timeline maps `pps` pixels to one second
+  // after a fixed gutter, so a visible span of N px is always N/pps seconds.
+  // Never scale a clip to fit the viewport: that squeezes it and freezes its
+  // waveform while the ruler scrolls.
+  function xAt(t, offset, pps, gutter) {
+    return gutter + (t - offset) * pps;
+  }
+
+  function timeAtX(x, offset, pps, gutter) {
+    return offset + (x - gutter) / pps;
+  }
+
+  // Where playback must start reading inside c.samples when the playhead is at
+  // `atAbs`. `start` is the first audible sample of the window, so the buffer
+  // offset is the source in-point - not "how far into the timeline the clip
+  // began". Without this a split tail plays the head of the take.
+  function sourceOffsetAt(c, atAbs, sampleRate) {
+    const from = clipFrom(c);
+    const to = clipTo(c);
+    const idx = from + Math.round((atAbs - c.start) * sampleRate);
+    return Math.max(from, Math.min(to, idx)) / sampleRate;
+  }
+
   return {
     MIN_LEN,
     clipFrom,
@@ -178,5 +201,8 @@
     snapTime,
     cutPoints,
     nextCut,
+    xAt,
+    timeAtX,
+    sourceOffsetAt,
   };
 });

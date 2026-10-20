@@ -12,6 +12,7 @@
   const GUTTER = 38;       // px reserved for lane labels on the left
   const EDGE_PX = 6;       // trim hit zone
   const SNAP_PX = 8;
+  const EDGE_SCROLL_PX = 26; // drag near the viewport edge to scroll
   const MAX_HISTORY = 80;
   const MAX_WAVE_GAIN = 8; // quiet takes are amplified visually up to 8x
   const TICK_STEPS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
@@ -36,6 +37,7 @@
   };
   let micIdCounter = 0;
   let micLastDown = { key: null, t: 0 };
+  let micEdgeRaf = 0;
   const micScaleCache = new WeakMap();
 
   const mq = (sel) => document.querySelector(sel);
@@ -289,7 +291,10 @@
       const cEnd = MM.clipEnd(clip, sr);
       if (cEnd <= start + 1e-6) continue;
       const from = Math.max(start, clip.start);
-      const offset = from - clip.start;
+      // Start reading at the window's source in-point, not at "how far into the
+      // timeline the clip began": a split tail or a trimmed clip must play its
+      // own audio, never the head of the take.
+      const offset = MM.sourceOffsetAt(clip, from, sr);
       const dur = cEnd - from;
       if (dur <= 1e-4) continue;
       const buf = ctx.createBuffer(1, clip.samples.length, sr);
@@ -347,12 +352,12 @@
   }
   function micViewWidth() { return Math.max(1, micMiniWidth() - GUTTER - 8); }
   function micViewDur() { return micViewWidth() / mic.pps; }
-  function micXAt(t) { return GUTTER + (t - mic.offset) * mic.pps; }
+  function micXAt(t) { return MM.xAt(t, mic.offset, mic.pps, GUTTER); }
   function micTimeAtX(clientX) {
     const mini = mq('#mic-mini');
     if (!mini) return 0;
     const r = mini.getBoundingClientRect();
-    return Math.max(0, mic.offset + (clientX - r.left - GUTTER) / mic.pps);
+    return Math.max(0, MM.timeAtX(clientX - r.left, mic.offset, mic.pps, GUTTER));
   }
   function micOffsetMax() {
     const end = Math.max(micContentEnd(), mic.playhead, 0);
@@ -547,9 +552,15 @@
     g.strokeStyle = 'rgba(200,248,255,.9)';
     g.lineWidth = 1;
     const gain = micClipGain(clip);
+    // Peaks are sampled over the visible pixels only, so one pixel is always
+    // 1/pps seconds: a take that runs past the viewport is cut off at the edge
+    // instead of being squeezed, and scrolling slides its waveform under the
+    // ruler (it must never be rescaled to fit what happens to be on screen).
+    const vt0 = MM.timeAtX(left, mic.offset, mic.pps, GUTTER);
+    const vt1 = MM.timeAtX(right, mic.offset, mic.pps, GUTTER);
     micDrawWave(g, left, right, top + 2, bottom - 2, (i, n) => {
-      const t0 = clip.start + (i / n) * dur;
-      const t1 = clip.start + ((i + 1) / n) * dur;
+      const t0 = vt0 + (i / n) * (vt1 - vt0);
+      const t1 = vt0 + ((i + 1) / n) * (vt1 - vt0);
       return micClipPeak(clip, t0, t1);
     }, gain);
     g.restore();
@@ -590,9 +601,11 @@
     g.clip();
     g.strokeStyle = 'rgba(255,190,190,.95)';
     g.lineWidth = 1;
+    const recVt0 = MM.timeAtX(left, mic.offset, mic.pps, GUTTER);
+    const recVt1 = MM.timeAtX(right, mic.offset, mic.pps, GUTTER);
     micDrawWave(g, left, right, top + 2, bottom - 2, (i, n) => {
-      const t0 = mic.recStart + (i / n) * dur;
-      const t1 = mic.recStart + ((i + 1) / n) * dur;
+      const t0 = recVt0 + (i / n) * (recVt1 - recVt0);
+      const t1 = recVt0 + ((i + 1) / n) * (recVt1 - recVt0);
       return micRecPeak(t0, t1);
     }, micRecGain());
     g.restore();
@@ -820,6 +833,7 @@
       type,
       id: clip.id,
       startT: t,
+      clientX: e.clientX,
       primaryOrig: clip.start,
       origStarts,
       moved: false,
@@ -827,6 +841,85 @@
     };
     micUpdateUI();
     micDraw();
+  }
+
+  /* ---- drag auto-scroll ---------------------------------------------------
+     Dragging a take past an edge of the mini timeline must push the view (and
+     the take) further out, the way Premiere and Resolve do, instead of pinning
+     the take against an invisible wall. Works for moves and for trims. */
+  function micEdgeScrollStop() {
+    if (micEdgeRaf) { cancelAnimationFrame(micEdgeRaf); micEdgeRaf = 0; }
+  }
+
+  function micEdgeScrollTick() {
+    micEdgeRaf = 0;
+    const d = mic.drag;
+    const mini = mq('#mic-mini');
+    if (!d || !mini) return;
+    if (d.type !== 'move' && d.type !== 'trim-l' && d.type !== 'trim-r') return;
+    const r = mini.getBoundingClientRect();
+    const px = d.clientX == null ? 0 : d.clientX - r.left;
+    const lo = GUTTER + EDGE_SCROLL_PX;
+    const hi = r.width - EDGE_SCROLL_PX;
+    let dir = 0;
+    let over = 0;
+    if (px > hi) { dir = 1; over = Math.min(EDGE_SCROLL_PX, px - hi); }
+    else if (px < lo) { dir = -1; over = Math.min(EDGE_SCROLL_PX, lo - px); }
+    if (!dir) return;
+    const before = mic.offset;
+    // 1.5 px/frame at the edge, ramping to ~10 px/frame further out.
+    const step = Math.max(1.5, (over / EDGE_SCROLL_PX) * 10) / mic.pps;
+    mic.offset = clamp(mic.offset + dir * step, 0, micOffsetMax());
+    if (mic.offset === before) return;
+    // The pointer's time moved with the view, so re-apply the drag at the new
+    // time: the take keeps following the cursor while the ruler scrolls.
+    micApplyDrag(micTimeAtX(d.clientX));
+    micUpdateUI();
+    micDraw();
+    micEdgeRaf = requestAnimationFrame(micEdgeScrollTick);
+  }
+
+  function micEdgeScrollStart() {
+    if (!micEdgeRaf) micEdgeRaf = requestAnimationFrame(micEdgeScrollTick);
+  }
+
+  // Apply a move/trim drag at timeline time `t`. Shared by pointermove and the
+  // auto-scroll loop so both go through the same snap/clamp rules.
+  function micApplyDrag(t) {
+    const d = mic.drag;
+    if (!d) return;
+    const found = micFind(d.id);
+    if (!found) return;
+    if (d.type === 'move') {
+      let delta = t - d.startT;
+      if (mic.snap) {
+        const snapped = MM.snapTime(
+          d.primaryOrig + delta,
+          micSnapPoints(d.id),
+          SNAP_PX / mic.pps,
+        );
+        delta = snapped - d.primaryOrig;
+      }
+      let minOrig = Infinity;
+      for (const v of d.origStarts.values()) minOrig = Math.min(minOrig, v);
+      if (Number.isFinite(minOrig) && minOrig + delta < 0) delta = -minOrig;
+      if (Math.abs(delta) > 1e-9) d.moved = true;
+      for (const [id, orig] of d.origStarts) {
+        const item = micFind(id);
+        if (item) micReplace(MM.moveClip(item.clip, orig + delta));
+      }
+      micSort();
+    } else if (d.type === 'trim-l' || d.type === 'trim-r') {
+      let at = t;
+      if (mic.snap) at = MM.snapTime(at, micSnapPoints(d.id), SNAP_PX / mic.pps);
+      const edge = d.type === 'trim-l' ? 'left' : 'right';
+      // trimClip moves the sample window, so the edge can be dragged back out.
+      micReplace(MM.trimClip(found.clip, edge, at, mic.sampleRate, MIC_MIN_LEN));
+      d.moved = true;
+      micSort();
+    }
+    if (d.moved) micLastDown = { key: null, t: 0 };
+    micMarkDirty();
   }
 
   function micPointerMove(e) {
@@ -860,45 +953,17 @@
       micDraw();
       return;
     }
-    const found = micFind(d.id);
-    if (!found) return;
-    if (d.type === 'move') {
-      let delta = t - d.startT;
-      if (mic.snap) {
-        const snapped = MM.snapTime(
-          d.primaryOrig + delta,
-          micSnapPoints(d.id),
-          SNAP_PX / mic.pps,
-        );
-        delta = snapped - d.primaryOrig;
-      }
-      let minOrig = Infinity;
-      for (const v of d.origStarts.values()) minOrig = Math.min(minOrig, v);
-      if (Number.isFinite(minOrig) && minOrig + delta < 0) delta = -minOrig;
-      if (Math.abs(delta) > 1e-9) d.moved = true;
-      for (const [id, orig] of d.origStarts) {
-        const item = micFind(id);
-        if (item) micReplace(MM.moveClip(item.clip, orig + delta));
-      }
-      micSort();
-    } else {
-      let at = t;
-      if (mic.snap) at = MM.snapTime(at, micSnapPoints(d.id), SNAP_PX / mic.pps);
-      const edge = d.type === 'trim-l' ? 'left' : 'right';
-      // trimClip moves the sample window, so the edge can be dragged back out.
-      micReplace(MM.trimClip(found.clip, edge, at, mic.sampleRate, MIC_MIN_LEN));
-      d.moved = true;
-      micSort();
-    }
-    if (d.moved) micLastDown = { key: null, t: 0 };
-    micMarkDirty();
+    d.clientX = e.clientX;
+    micApplyDrag(t);
     micUpdateUI();
     micDraw();
+    micEdgeScrollStart();
   }
 
   function micPointerUp() {
     const d = mic.drag;
     if (!d) return;
+    micEdgeScrollStop();
     mic.drag = null;
     const mini = mq('#mic-mini');
     if (mini) { mini.classList.remove('panning'); mini.style.cursor = ''; }
@@ -1051,6 +1116,7 @@
     }
     if (mic.recording) micStopCapture();
     micStopPlay();
+    micEdgeScrollStop();
     if (mic.raf) { cancelAnimationFrame(mic.raf); mic.raf = 0; }
     try { if (mic.ctx) mic.ctx.close(); } catch (_) {}
     mic.ctx = null;

@@ -11,6 +11,17 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
   shuttle bar as the main timeline. Save writes that one take as a 48 kHz mono WAV.
 
 ### Fixed
+- **Waveforms stay locked to the ruler.** A take dragged past the edge of the view used
+  to be squeezed into the visible sliver, and a take longer than the view redrew an
+  identical picture while the ruler scrolled — the waveform looked frozen. Peaks are now
+  sampled over the visible pixels only, so one pixel is always the zoom's `1/pps`
+  seconds: takes are cut off at the edge and slide under the ruler as you scroll, pan,
+  jog or play.
+- **Playback reads the take's source in-point.** After splitting and deleting the
+  beginning, Play used to start at the head of the take ("you still hear the beginning").
+  Playback now starts at the clip's `[from, to)` window, so it matches the saved WAV.
+- **Dragging a take or an edge past the viewport auto-scrolls the timeline**, so you can
+  keep dragging further out instead of pinning it against the edge.
 - **Dragging a take's edge no longer trims the wrong side.** The pointer passed
   `left`/`right` while the model matched `l`, so every edge drag shortened the right
   edge. Edges now move the side you grabbed.
