@@ -83,3 +83,21 @@ test('mixClips leaves gaps silent and handles an empty take', () => {
   assert.equal(M.mixClips([], SR).length, 0);
   assert.equal(M.takesEnd([], SR), 0);
 });
+
+test('snapTime picks the nearest point inside the threshold', () => {
+  assert.equal(M.snapTime(1.04, [0, 1, 2], 0.05), 1);
+  assert.equal(M.snapTime(1.2, [0, 1, 2], 0.05), 1.2);
+});
+
+test('cutPoints returns sorted unique starts and ends', () => {
+  const clips = [c(0, new Array(10).fill(0)), c(1, new Array(10).fill(0))];
+  assert.deepEqual(M.cutPoints(clips, SR), [0, 1, 2]);
+});
+
+test('nextCut walks to the previous and next cut', () => {
+  const points = [0, 1, 2.5];
+  assert.equal(M.nextCut(points, 1, -1), 0);
+  assert.equal(M.nextCut(points, 1, 1), 2.5);
+  assert.equal(M.nextCut(points, 0, -1), null);
+  assert.equal(M.nextCut(points, 2.5, 1), null);
+});

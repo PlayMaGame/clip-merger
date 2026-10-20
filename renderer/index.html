@@ -303,17 +303,24 @@
         <button id="mic-play" class="btn accent" title="Play / pause both tracks"><svg class="icon" aria-hidden="true"><use id="mic-use-play" href="#i-play"/></svg><span id="mic-play-label">Play</span></button>
         <button id="mic-stop" class="btn ghost" title="Stop recording or playback">Stop</button>
         <button id="mic-split" class="btn ghost" title="Split the selected take at the playhead"><svg class="icon" aria-hidden="true"><use href="#i-split"/></svg>Split</button>
-        <button id="mic-del" class="btn danger" title="Delete the selected take"><svg class="icon" aria-hidden="true"><use href="#i-delete"/></svg>Delete</button>
+        <button id="mic-del" class="btn danger" title="Delete the selected take(s)"><svg class="icon" aria-hidden="true"><use href="#i-delete"/></svg>Delete</button>
+        <label class="check inline mic-snap" title="Snap to clip edges, the playhead and 0">
+          <input id="mic-snap" type="checkbox" checked />
+          <span>Snap</span>
+        </label>
+        <button id="mic-fit" class="btn ghost" title="Fit the mic timeline (F)">Fit</button>
+        <span id="mic-zoom" class="mic-zoom muted">90 px/s</span>
         <span id="mic-rec-dot" class="mic-rec hidden" aria-hidden="true"></span>
         <span class="spacer"></span>
         <span id="mic-time" class="muted">0.000 / 0.000</span>
       </div>
       <div id="mic-mini" class="mic-mini">
+        <div id="mic-ruler" class="mic-ruler"><canvas id="mic-ruler-canvas"></canvas></div>
         <div class="mic-lane" data-track="main"><span class="mic-lane-label">MAIN</span><canvas id="mic-wave-main"></canvas></div>
         <div class="mic-lane alt" data-track="alt"><span class="mic-lane-label">ALT</span><canvas id="mic-wave-alt"></canvas></div>
         <div id="mic-playhead" class="mic-playhead"></div>
       </div>
-      <p class="muted mic-hint">Record punches into the active track at the playhead. Drag a take to move it, drag its edges to trim, then Split / Delete to shape it. Save mixes both tracks into one WAV.</p>
+      <p class="muted mic-hint">Record punches into the active track at the playhead. Drag a take to move it, drag its edges to trim, then Split / Delete to shape it. Ctrl+wheel zooms and Shift+wheel pans. Save mixes both tracks into one WAV.</p>
       <div class="modal-actions">
         <button id="mic-cancel" class="btn ghost">Cancel</button>
         <button id="mic-save" class="btn accent">Save WAV</button>
@@ -462,6 +469,7 @@
   <script src="timeline-ops.js"></script>
   <script src="mic-wav.js"></script>
   <script src="mic-model.js"></script>
+  <script src="mic-ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

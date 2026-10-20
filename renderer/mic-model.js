@@ -97,6 +97,36 @@
     return out;
   }
 
+  function snapTime(t, points, threshold) {
+    let best = t;
+    let bestD = threshold;
+    for (const p of points) {
+      const d = Math.abs(p - t);
+      if (d <= bestD) { best = p; bestD = d; }
+    }
+    return best;
+  }
+
+  function cutPoints(clips, sampleRate) {
+    const q = (v) => Math.round(v * 1e6) / 1e6;
+    const set = new Set([0]);
+    for (const c of clips) {
+      set.add(q(c.start));
+      set.add(q(c.start + c.samples.length / sampleRate));
+    }
+    return [...set].sort((a, b) => a - b);
+  }
+
+  function nextCut(points, t, dir, eps = 1e-6) {
+    let best = null;
+    if (dir < 0) {
+      for (const p of points) if (p < t - eps && (best === null || p > best)) best = p;
+    } else {
+      for (const p of points) if (p > t + eps && (best === null || p < best)) best = p;
+    }
+    return best;
+  }
+
   return {
     MIN_LEN,
     clipDur,
@@ -108,5 +138,8 @@
     removeRangeFromClip,
     punchTrack,
     mixClips,
+    snapTime,
+    cutPoints,
+    nextCut,
   };
 });

@@ -3,6 +3,14 @@
 All notable changes to Clip Merger are documented here.
 Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 
+## [0.9.2] - 2026-10-20
+
+### Changed
+- **Mic recorder rebuilt as a compact audio timeline.** It now has a ruler, MAIN/ALT
+  lanes, zoom/Fit, snapping, split/delete, undo/redo and the main timeline's shortcuts
+  (Space, S, Del, Ctrl+Z/Y, A/D, F, Ctrl+wheel), and it draws the live waveform while
+  recording. Save still mixes both tracks into one 48 kHz mono WAV.
+
 ## [0.9.1] - 2026-10-20
 
 ### Fixed
