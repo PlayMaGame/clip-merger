@@ -2537,6 +2537,23 @@ function cutBounds() {
   return [...set].sort((a, b) => a - b);
 }
 
+// Every item end, so a cut jump can tell "this boundary ends something" (land on
+// its last frame) from "this boundary is a gap's edge / a start" (land on it).
+function cutEnds() {
+  const total = totalDuration();
+  const ends = [];
+  const addEnd = (start, dur) => {
+    const en = (start || 0) + dur;
+    if (en > 1e-6 && en < total - 1e-6) ends.push(en);
+  };
+  for (const it of state.timeline) addEnd(it.start, durOf(it));
+  for (const h of state.hybrid) addEnd(hybStartOf(h), hybDurOf(h));
+  for (const s of state.soundboard) addEnd(s.startTime || 0, sndDur(s));
+  for (const e of state.effects) addEnd(e.start || 0, Math.max(0, e.dur || 0));
+  if (total > 1e-6) ends.push(total); // the timeline end is an end too
+  return ends;
+}
+
 function jumpToStart() {
   if (state.playing) pausePlay();
   seekPreview(0);
@@ -2572,23 +2589,24 @@ function soleSelectedItemEdges() {
 function jumpToCut(dir) {
   if (state.playing) pausePlay();
   const t = state.playhead;
+  const frame = frameDur();
   const bs = cutBounds();
+  const ends = cutEnds();
   let target = null;
   let fromGlobal = false;
   const se = soleSelectedItemEdges();
   if (se) {
-    const edgeTime = dir > 0 ? se[1] : se[0]; // D -> end, A -> start
-    if (Math.abs(t - edgeTime) > 1e-6) {
+    // D -> the item's last frame (its end is the next item's first frame),
+    // A -> its start frame. Pressing the key when already there falls through.
+    const edgeTime = dir > 0 ? Math.max(se[0], se[1] - frame) : se[0]; // D -> end, A -> start
+    const at = dir > 0 ? t >= edgeTime - 1e-6 : t <= edgeTime + 1e-6;
+    if (!at) {
       target = edgeTime;
       if (soleSelectedEffect()) state.effectPose = dir > 0 ? 'to' : 'from';
     }
   }
   if (target == null) {
-    if (dir < 0) {
-      for (let i = bs.length - 1; i >= 0; i--) { if (bs[i] < t - 1e-6) { target = bs[i]; break; } }
-    } else {
-      for (const b of bs) { if (b > t + 1e-6) { target = b; break; } }
-    }
+    target = TimelineOps.nextCutTarget(bs, ends, t, dir, frame);
     if (target != null) fromGlobal = true;
   }
   if (target == null) { setStatus(dir < 0 ? 'Already at the first cut.' : 'Already at the last cut.'); return; }

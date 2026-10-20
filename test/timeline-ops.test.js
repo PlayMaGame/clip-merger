@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
+const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
 
 const clip = (start, dur) => ({ id: `c${start}`, start, srcStart: 0, srcEnd: dur, speed: 1 });
 const hybClip = (start, dur) => ({ id: `h${start}`, kind: 'clip', start, srcStart: 0, srcEnd: dur, speed: 1 });
@@ -386,4 +386,51 @@ test('clampZoom keeps the effect zoom inside the slider range', () => {
   // Wide enough to shrink the picture to a speck and to push in hard.
   assert.ok(ZOOM_MIN <= 0.05);
   assert.ok(ZOOM_MAX >= 8);
+});
+
+// Cut jumps (A/D). Frames are half-open, so an item's end boundary already shows
+// whatever comes next; a jump forward lands on the outgoing item's last frame.
+const FPS = 60;
+const FRAME = 1 / FPS;
+
+test('nextCutTarget lands on the last frame of the item that ends there', () => {
+  // Two contiguous 1 s clips: cuts at 0, 1, 2 where 1 and 2 are ends.
+  const bounds = [0, 1, 2];
+  const ends = [1, 2];
+  assert.equal(nextCutTarget(bounds, ends, 0.2, 1, FRAME), 59 / 60);
+});
+
+test('nextCutTarget walks on from the last frame instead of sticking', () => {
+  const bounds = [0, 1, 2];
+  const ends = [1, 2];
+  // Already on the last frame of the first clip -> the next end, one frame early.
+  assert.equal(nextCutTarget(bounds, ends, 1 - FRAME, 1, FRAME), 2 - FRAME);
+  // Exactly on the boundary is already the next shot, so it skips as well.
+  assert.equal(nextCutTarget(bounds, ends, 1, 1, FRAME), 2 - FRAME);
+});
+
+test('nextCutTarget keeps a gap edge exact and backward jumps on the start frame', () => {
+  // Clip 0..1, gap, curve: 2 is a start with nothing ending on it.
+  const bounds = [0, 1, 2];
+  const ends = [1];
+  assert.equal(nextCutTarget(bounds, ends, 1.5, 1, FRAME), 2);
+  assert.equal(nextCutTarget(bounds, ends, 1.5, -1, FRAME), 1);
+  assert.equal(nextCutTarget(bounds, ends, 1 - FRAME, -1, FRAME), 0);
+});
+
+test('nextCutTarget handles the timeline end, the edges and float noise', () => {
+  const bounds = [0, 1];
+  const ends = [1];
+  assert.equal(nextCutTarget(bounds, ends, 0.1, 1, FRAME), 1 - FRAME); // total = an end
+  assert.equal(nextCutTarget([0], [0], 0, -1, FRAME), null);
+  assert.equal(nextCutTarget(bounds, ends, 1 - FRAME, 1, FRAME), null);
+  // A boundary carrying float noise still counts as that item's end.
+  const noisy = nextCutTarget([0, 0.9999999, 2], [1], 0.2, 1, FRAME);
+  assert.ok(Math.abs(noisy - (1 - FRAME)) < 1e-6, String(noisy));
+});
+
+test('nextCutTarget skips a candidate that is behind the playhead', () => {
+  // t sits inside the last frame of the first clip, so 1 - frame is in the past.
+  const got = nextCutTarget([0, 1, 2], [1, 2], 0.99, 1, 0.5);
+  assert.equal(got, 1.5);
 });

@@ -286,6 +286,27 @@
     };
   }
 
+  // Where a cut jump (A/D) should land. Frames are half-open [start, end), so an
+  // item's end boundary is already the first frame of whatever follows (the next
+  // shot, or black at the end of the timeline). Landing there showed the next item
+  // instead of the outgoing one's last frame, so an END boundary lands a frame
+  // earlier; a boundary with nothing ending on it (a gap's edge) is a real first
+  // frame and stays put. Backward jumps want the start frame, so they are exact.
+  function nextCutTarget(bounds, ends, t, dir, frame) {
+    if (!bounds || !bounds.length) return null;
+    const f = Math.max(1e-6, frame || 0);
+    const isEnd = (b) => !!(ends && ends.some((x) => Math.abs(x - b) < 1e-6));
+    if (dir < 0) {
+      for (let i = bounds.length - 1; i >= 0; i--) if (bounds[i] < t - 1e-6) return bounds[i];
+      return null;
+    }
+    for (const b of bounds) {
+      const cand = isEnd(b) ? Math.max(0, b - f) : b;
+      if (cand > t + 1e-6) return cand;
+    }
+    return null;
+  }
+
   // Restore a history snapshot into the document shape. Every lane that
   // snapshotDoc captures must be restored here — keeping this pure makes the
   // "undo must restore effects too" contract unit-testable.
@@ -307,7 +328,7 @@
     return !!(item && (item.still === true || item.kind === 'image' || item.kind === 'freeze'));
   }
 
-  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, sourceConflict, restoreDocument, isStill };
+  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TimelineOps = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

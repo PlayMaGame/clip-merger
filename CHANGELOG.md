@@ -36,6 +36,11 @@ Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
   edge back over audio instead of losing it.
 - **Waveforms are much easier to read.** Each take is normalized to its own peak
   (up to 8×) before drawing; quiet recordings fill the lane. Audio data is unchanged.
+- **A/D land on a real frame.** D used to stop on the next item's first frame (or on
+  black past the end of the timeline) because an item's end boundary is already the
+  following frame, so the jump looked like it skipped the outgoing item's last frame.
+  D now lands on the last frame of the item that ends there, while a gap edge still
+  lands exactly on the gap (a start frame is never shaved).
 - **Space always plays/pauses in the mic editor**, even when a toolbar button still
   has focus; **R** now toggles recording.
 - **An image's blurred backdrop is visible.** The still element painted an opaque black
