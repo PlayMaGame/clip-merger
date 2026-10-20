@@ -3,6 +3,41 @@
 All notable changes to Clip Merger are documented here.
 Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 
+## [0.9.4] - 2026-10-20
+
+### Added
+- **A real Transition: Fade In / Fade Out.** The old Transition bin held short clips, so
+  the bin is now **Transitions** and it adds a fade band where you want it — at the
+  playhead, or dragged onto the MAIN, ALT or SOUND lane. The band is a normal effect
+  band: drag it to move it, drag its ends to make the fade as long as you like
+  (double-click deletes it). A new fade defaults to 3 s.
+- **The fade is edited from the FX toolbar:** an Opacity slider with a % box (0–100%,
+  same widget as the Zoom slider), the Start/End switch to pick which end of the band you
+  are setting, and a **Fade Audio** checkbox. Fade Audio is on by default for a clip
+  fade; a fade dropped on a SOUND item always fades the audio, so the checkbox is
+  disabled there.
+- **Intermissions are first-class media.** A folder named `INTERMISSIONS` (or
+  `INTERSTITIALS`) inside the media root is pinned directly under `IMAGES`, and every
+  card, timeline clip and ALT clip from it keeps the blue transition colour.
+- **The bin layout is remembered.** The right-hand bins can be resized vertically too
+  (Transitions / Sounds / Effects heights, drag the divider between them) and every
+  panel's height, width and collapsed state is restored on the next launch.
+
+### Changed
+- **A fade ramps the composed frame**, including a clip's blurred backdrop, and it
+  matches the export by construction: the preview puts a black overlay over the stage
+  with opacity `1 − alpha`, exactly what ffmpeg's `fade` does to the frame. A fade
+  stretched across two clips keeps ramping instead of restarting, and sound-lane fades
+  are mixed with the soundboard's own `afade`.
+
+### Fixed
+- **A fade no longer confuses the camera effects.** Fade bands carry no pose, so they are
+  skipped by the zoom/shake maths (previously an active fade band would have been treated
+  as an identity zoom) and can never decide a clip's preview backdrop.
+- **A faded segment re-encodes.** A fade changes the pixels of every frame in its band,
+  and a filter cannot run on a lossless stream copy, so those segments are re-encoded
+  while the rest of the timeline still copies.
+
 ## [0.9.3] - 2026-10-20
 
 ### Changed

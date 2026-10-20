@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, picturePointAt, screenToPicture, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
+const { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, picturePointAt, screenToPicture, ZOOM_MIN, ZOOM_MAX, nextCutTarget, fadeAmount, fadeAlphaAt, fadeWindowsForSegment, sourceConflict, restoreDocument, isStill } = require('../renderer/timeline-ops');
 
 const clip = (start, dur) => ({ id: `c${start}`, start, srcStart: 0, srcEnd: dur, speed: 1 });
 const hybClip = (start, dur) => ({ id: `h${start}`, kind: 'clip', start, srcStart: 0, srcEnd: dur, speed: 1 });
@@ -493,4 +493,68 @@ test('screenToPicture reports clicks outside the picture', () => {
   assert.ok(top.cy < 0, String(top.cy)); // above the picture
   const side = screenToPicture({ z: 1, cx: 0.5, cy: 0.5 }, W, H, ar, -5, H / 2);
   assert.ok(side.cx < 0, String(side.cx));
+});
+
+// ---- fades -----------------------------------------------------------------
+const fade = (start, dur, dir, extra) => ({ id: `f${start}${dir}`, type: 'fade', dir, start, dur, ...extra });
+
+test('fadeAmount ramps inside the band and holds the far end', () => {
+  const fin = fade(2, 1, 'in');
+  assert.equal(fadeAmount(fin, 1.5), 1);   // before the band: untouched
+  assert.equal(fadeAmount(fin, 2), 0);     // starts black
+  assert.equal(fadeAmount(fin, 2.5), 0.5);
+  assert.equal(fadeAmount(fin, 3), 1);     // fully visible, and stays
+  assert.equal(fadeAmount(fin, 9), 1);
+
+  const fout = fade(2, 1, 'out');
+  assert.equal(fadeAmount(fout, 1.5), 1);
+  assert.equal(fadeAmount(fout, 2.5), 0.5);
+  assert.equal(fadeAmount(fout, 3), 0);
+  assert.equal(fadeAmount(fout, 9), 0);    // holds black to the segment end
+});
+
+test('fadeAlphaAt only paints inside the segment it overlaps', () => {
+  const effs = [fade(4, 1, 'out')]; // a fade-out at the end of segment [0,5)
+  assert.equal(fadeAlphaAt(effs, 4.5, 0, 5), 0.5);
+  assert.ok(Math.abs(fadeAlphaAt(effs, 4.9, 0, 5) - 0.1) < 1e-9);
+  // The next clip starts at 5: the finished fade-out must not bleed into it.
+  assert.equal(fadeAlphaAt(effs, 6, 5, 9), 1);
+  // Without segment bounds it behaves like a level (used by tests/tools only).
+  assert.equal(fadeAlphaAt(effs, 6), 0);
+});
+
+test('fadeAlphaAt multiplies overlapping fades and ignores other effects', () => {
+  const effs = [fade(0, 2, 'in'), fade(1, 2, 'out'), { type: 'zoom', start: 0, dur: 2 }];
+  const a = fadeAlphaAt(effs, 1.5, 0, 3);
+  assert.ok(Math.abs(a - 0.75 * 0.75) < 1e-9, String(a)); // 0.75 in × 0.75 out
+  assert.equal(fadeAlphaAt([{ type: 'zoom', start: 0, dur: 2 }], 1, 0, 3), 1);
+});
+
+test('fadeWindowsForSegment keeps the band ramp when it spans a segment edge', () => {
+  const effs = [fade(0.5, 2, 'in')];
+  // Segment [1,4) starts 0.5 s into the band, so the segment's local start is
+  // negative: ffmpeg then continues the ramp instead of restarting it at 0.
+  const w = fadeWindowsForSegment(effs, 1, 4);
+  assert.equal(w.length, 1);
+  assert.equal(w[0].dir, 'in');
+  assert.ok(Math.abs(w[0].start - -0.5) < 1e-9, String(w[0].start));
+  assert.ok(Math.abs(w[0].dur - 2) < 1e-9, String(w[0].dur));
+  assert.equal(w[0].audio, true);
+  // A band that does not overlap the segment produces nothing.
+  assert.equal(fadeWindowsForSegment(effs, 5, 6).length, 0);
+  // A band fully inside a later segment keeps its offset.
+  const w2 = fadeWindowsForSegment([fade(6, 1, 'out')], 5, 8);
+  assert.ok(Math.abs(w2[0].start - 1) < 1e-9, String(w2[0].start));
+  assert.ok(Math.abs(w2[0].dur - 1) < 1e-9, String(w2[0].dur));
+  // The local start always matches fadeAmount at the segment's first frame.
+  const at0 = fadeAmount(effs[0], 1);
+  const local0 = Math.max(0, Math.min(1, (0 - w[0].start) / w[0].dur));
+  assert.ok(Math.abs(at0 - local0) < 1e-9, `${at0} vs ${local0}`);
+});
+
+test('fadeWindowsForSegment carries the per-fade audio choice', () => {
+  const w = fadeWindowsForSegment([fade(0, 1, 'in', { audio: false })], 0, 2);
+  assert.equal(w[0].audio, false);
+  const w2 = fadeWindowsForSegment([fade(0, 1, 'in', { audio: true })], 0, 2);
+  assert.equal(w2[0].audio, true);
 });

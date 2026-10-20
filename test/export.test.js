@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { exportProject, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, zoomScaleExpr, buildCameraExprs, cameraActive, shakeExpr, chooseMode, buildRenderPlan } = require('../electron/ffmpeg/export');
+const { exportProject, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, zoomScaleExpr, buildCameraExprs, cameraActive, shakeExpr, chooseMode, buildRenderPlan, fadeChain, afadeChain } = require('../electron/ffmpeg/export');
 
 function clip(start, srcStart, srcEnd, extra) {
   return Object.assign({
@@ -480,4 +480,59 @@ test('cutArgs still mode loops one image and adds silent audio', () => {
   assert.ok(!args.includes('-ss'));
   assert.ok(args.includes('anullsrc=r=48000:cl=stereo'));
   assert.equal(args.filter((x) => x === '-i').length, 2);
+});
+
+test('chooseMode forces a re-encode when a fade covers the segment', () => {
+  const base = { vOk: true, aOk: true, inKf: true, outKf: true, normalize: false, speed: 1, volDb: 0 };
+  assert.equal(chooseMode(base), 'lossless');
+  assert.equal(chooseMode({ ...base, fade: [{ dir: 'in', start: 0, dur: 1, audio: true }] }), 'reencode');
+  assert.equal(chooseMode({ ...base, fade: [] }), 'lossless');
+});
+
+test('fadeChain writes ffmpeg fades in the segment local time', () => {
+  const s = fadeChain([
+    { dir: 'in', start: -0.5, dur: 1, audio: true },
+    { dir: 'out', start: 2, dur: 0.5, audio: false },
+  ]);
+  // A negative start means the band began before the segment: ffmpeg carries on
+  // the ramp instead of restarting it (a fade stretched across two clips).
+  assert.match(s, /,fade=t=in:st=-0\.5000:d=1\.0000/);
+  assert.match(s, /,fade=t=out:st=2\.0000:d=0\.5000/);
+  assert.equal(fadeChain([]), '');
+  assert.equal(fadeChain(null), '');
+});
+
+test('afadeChain skips a picture-only fade', () => {
+  const f = [{ dir: 'in', start: 0, dur: 1, audio: true }, { dir: 'out', start: 1, dur: 1, audio: false }];
+  const af = afadeChain(f);
+  assert.equal(af.length, 1);
+  assert.match(af[0], /^afade=t=in:st=0\.0000:d=1\.0000$/);
+  assert.equal(afadeChain(null).length, 0);
+});
+
+test('cutArgs appends the fade to the plain video chain and the audio chain', () => {
+  const fade = [{ dir: 'in', start: 0, dur: 1, audio: true }, { dir: 'out', start: 2, dur: 1, audio: true }];
+  const a = cutArgs('x.mp4', 0, 3, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: [], W: 1080, H: 1920, FPS: 60,
+    normalize: false, mute: false, speed: 1, fit: 'cover', fade,
+  });
+  const vf = a[a.indexOf('-vf') + 1];
+  assert.match(vf, /,fade=t=in:st=0\.0000:d=1\.0000/);
+  assert.match(vf, /,fade=t=out:st=2\.0000:d=1\.0000/);
+  const af = a[a.indexOf('-af') + 1];
+  assert.match(af, /afade=t=in:st=0\.0000:d=1\.0000/);
+  assert.match(af, /aresample=48000$/);
+});
+
+test('cutArgs puts the fade before the [v] label of a filter_complex graph', () => {
+  const cam = buildCameraExprs([{ start: 0, dur: 2, from: { z: 1, cx: 0.5, cy: 0.5 }, to: { z: 1.5, cx: 0.5, cy: 0.5 }, ease: 'smooth' }], 0, 2, 'black');
+  const args = cutArgs('in.mp4', 0, 2, {
+    mode: 'reencode', encoder: 'libx264', encoderOpts: [], W: 540, H: 960, FPS: 30,
+    normalize: false, mute: false, speed: 1, fit: 'blur', volumeDb: 0, camera: cam,
+    fade: [{ dir: 'in', start: 0, dur: 1, audio: false }],
+  });
+  const fc = args[args.indexOf('-filter_complex') + 1];
+  assert.match(fc, /fade=t=in:st=0\.0000:d=1\.0000\[v\]$/);
+  // Picture-only fade: the audio chain carries no afade.
+  assert.ok(!/afade/.test(args[args.indexOf('-af') + 1]));
 });

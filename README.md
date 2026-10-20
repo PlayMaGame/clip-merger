@@ -9,11 +9,15 @@ already matches the export size/FPS).
 
 ## Features
 
-- **3 media bins** (across the top, resizable, collapsible, thumbnail grids with own scrollbars):
-  **Media** (videos and images), **Transitions**, **Sounds** (incl. music). Each points at a
-  folder (set with 📁 or in Settings); folders are watched, so files added in Explorer
-  appear automatically. An `IMAGES` subfolder is pinned to the top of Media, and any
-  PNG/JPG/JPEG/WebP/GIF/BMP file can be dropped on MAIN or ALT as a 3-second still.
+- **3 bins** (resizable in both directions, collapsible, thumbnail grids with own
+  scrollbars): **Media** (videos and images), **Transitions** (Fade In / Fade Out), and
+  **Sounds** (incl. music). Each points at a folder (set with 📁 or in Settings); folders
+  are watched, so files added in Explorer appear automatically. An `IMAGES` subfolder is
+  pinned to the top of Media, an `INTERMISSIONS` (or `INTERSTITIALS`) folder is pinned
+  right below it and keeps the blue transition colour on its cards and clips, and any
+  PNG/JPG/JPEG/WebP/GIF/BMP file can be dropped on MAIN or ALT as a 3-second still. The
+  Effects bin's panel sits under Transitions and Sounds; every panel's size and collapsed
+  state is remembered for the next launch.
 - **Timeline** (bottom, full-width, height-resizable): drag clips from the bins onto it,
   click-drag to **move**, drag edges to **trim** (yellow snap guide), **✂ Split** cuts
   exactly at the orange marker.
@@ -36,6 +40,14 @@ already matches the export size/FPS).
   Waveforms stay locked to the ruler while you scroll, jog or play, and playback always
   starts at the take's real in-point. Save writes one 48 kHz mono WAV under
   Sounds → **Mic Record**; takes are not auto-added.
+- **Fade transition** (Transitions bin: double-click to add one at the playhead, or drag
+  it onto MAIN, ALT or SOUND): **Fade In** (black → picture) and **Fade Out** (picture →
+  black). The band is a normal effect band — drag it to move it, drag its ends to set how
+  long the fade lasts (double-click deletes it) — and a new fade starts at 3 s. Select it
+  to get an **Opacity** slider with a % box, the **Start/End** switch for the end you are
+  editing, and a **Fade Audio** checkbox (on by default for a clip; a fade dropped on a
+  SOUND item always fades the audio). The preview shows the fade as a black overlay, so it
+  matches the render exactly, and a fade stretched across two clips keeps ramping.
 - **Camera effects** (Effects bin: drag onto a clip or double-click the card): **zoom
   in/out** and **shake**. Pick **Start** or **End** pose, then set the zoom with the FX
   panel slider or by typing a percentage (5%–800%); drag the picture to move the centre,
@@ -59,7 +71,8 @@ already matches the export size/FPS).
   silence, so output time matches the editor and sounds stay aligned. Keyframe-aligned
   cuts are stream-copied when the source already matches the output size/FPS; other
   cuts are re-encoded with an auto-detected encoder (AMD AMF / NVIDIA NVENC / CPU
-  libx264).
+  libx264). A fade changes the pixels of the frames it covers, so the clips under a fade
+  band are re-encoded too — the rest of the timeline still copies.
 - **Save/Open projects** (JSON v7; older projects are normalized on load).
 - **Settings persist**: your ffmpeg/ffprobe paths, the three bin folders, output folder,
   encoder, size/FPS and normalize flag are remembered between launches.
@@ -85,7 +98,7 @@ npm start
 ## Usage quick-start
 
 1. (Optional) Put clips into `clips/` (or pick any folder in the **Media** bin with 📁).
-2. Drag clips from the **Media/Transitions** bins onto the **Clips** lane → they insert
+2. Drag clips from the **Media** bin onto the **Clips** lane → they insert
    at the drop position (snap respected). Double-click a tile to append at the end.
 3. Drag sounds/music from the **Sounds** bin onto the **Sounds** lane; drag the right
    edge to trim, adjust volume in the editor.
@@ -100,7 +113,9 @@ npm start
    Sounds → **Mic Record**; drag the WAV onto the timeline.
 7. Put the playhead over a video clip and click **Freeze** in the Effects bin to hold a
    frame for 3 seconds and ripple the edit. Images dropped on MAIN/ALT start at 3 seconds
-   and can be trimmed longer.
+   and can be trimmed longer. For a transition, double-click **Fade In** / **Fade Out** in
+   the **Transitions** bin (or drag it onto a lane), then drag the band's ends to set how
+   long the fade lasts.
 8. Right-click any bin item to rate it (favorites sort to the top) or reveal it.
 9. Choose an output path and **Export**.
 

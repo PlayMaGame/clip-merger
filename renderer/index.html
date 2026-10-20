@@ -88,18 +88,14 @@
     </section>
 
     <section id="bins-right">
-      <section class="bin" data-bin="transitions">
+      <section class="bin" data-bin="transitions" id="bin-transitions">
         <header class="bin-head">
           <button class="bin-toggle" title="Collapse" aria-label="Collapse bin"><svg class="icon" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
           <span class="bin-title">Transitions</span>
-          <span class="bin-sub" data-role="sub"></span>
+          <span class="bin-sub">fade</span>
           <span class="spacer"></span>
-          <button class="btn ghost icon bin-dir" title="Choose folder" aria-label="Choose folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></button>
-          <button class="btn ghost icon bin-add" title="Add to timeline" aria-label="Add to timeline"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
-          <button class="btn ghost icon bin-refresh" title="Refresh" aria-label="Refresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button>
         </header>
-        <div class="bin-crumbs hidden" data-role="crumbs"></div>
-        <div class="bin-body" data-role="list"></div>
+        <div class="bin-body" id="transitions-list" data-role="list"></div>
       </section>
 
       <section class="bin" data-bin="sounds">
@@ -145,6 +141,7 @@
           <video id="preview-b" playsinline></video>
           <video id="preview" playsinline></video>
           <img id="preview-still" class="preview-still hidden" alt="" />
+          <div id="preview-fade" aria-hidden="true"></div>
           <div id="zoom-cross" class="zoom-cross hidden" aria-hidden="true"></div>
           <div id="zoom-hud" class="zoom-hud hidden" aria-hidden="true"></div>
         </div>
@@ -220,6 +217,12 @@
                 <input id="shake-amp" type="range" min="1" max="15" step="0.5" value="4" disabled />
                 <input id="shake-amp-num" type="number" min="1" max="15" step="0.5" value="4" disabled />
                 <span>%</span>
+              </label>
+            </div>
+            <div class="fx-sub" data-fx="fade">
+              <label class="check inline" title="Also fade the clip's own sound. A Fade dropped on the SOUND lane always fades the audio.">
+                <input id="btn-fade-audio" type="checkbox" checked disabled />
+                <span>Fade Audio</span>
               </label>
             </div>
           </div>

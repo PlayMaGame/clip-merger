@@ -26,6 +26,21 @@ const STILL_DEFAULT = 3;     // seconds an image/freeze starts at; can be trimme
 const STILL_MAX = 3600;      // virtual source ceiling for still trim handles
 const FREEZE_LEN = 3;        // seconds a freeze frame inserts
 
+// Real transitions (the Transitions panel): fades. A fade is an effect band that
+// ramps the picture's opacity — 1 is the untouched frame, 0 is black — so it
+// drags, stretches and deletes exactly like a zoom band. On a video lane it
+// fades the clip (and its sound, unless "Fade Audio" is off); on the SOUND lane
+// it fades the sound itself.
+const TRANSITION_DEFS = [
+  { defId: 'fade-in', name: 'Fade In', type: 'fade', dir: 'in' },
+  { defId: 'fade-out', name: 'Fade Out', type: 'fade', dir: 'out' },
+];
+
+// Media living in an INTERMISSIONS folder (the short "15 minutes later" cards)
+// keeps the intermission colour everywhere. Accepts the broadcast spelling too.
+const INTERMISSION_RE = /(^|[\\/])(intermissions?|interstitials?)([\\/]|$)/i;
+function isIntermissionsPath(p) { return INTERMISSION_RE.test(String(p || '')); }
+
 const state = {
   timeline: [],   // [{ id, path, name, start, srcStart, srcEnd, duration, mute, ...meta }]
   soundboard: [], // [{ id, path, name, duration, srcStart, srcEnd, endTime, startTime, volume }]
@@ -332,9 +347,23 @@ function setLayout(mode) {
 const BIN_SIZES_KEY = 'cm_binsizes';
 let binSizes = {
   portrait: { mediaW: 0, transW: 0, soundW: 0 },
-  landscape: { leftW: 260, rightW: 260 },
+  landscape: { leftW: 260, rightW: 260, transH: 0, sndH: 0 },
 };
 let binSplitDrag = null;
+
+// Which bins are collapsed, remembered per launch.
+const BIN_COLLAPSED_KEY = 'cm_bincollapsed';
+let binCollapsed = {};
+function loadBinCollapsed() {
+  try { binCollapsed = JSON.parse(localStorage.getItem(BIN_COLLAPSED_KEY) || '{}') || {}; } catch (_) { binCollapsed = {}; }
+}
+function saveBinCollapsed() { try { localStorage.setItem(BIN_COLLAPSED_KEY, JSON.stringify(binCollapsed)); } catch (_) {} }
+function applyBinCollapsed() {
+  for (const k of ['media', 'transitions', 'sounds', 'effects']) {
+    const el = binEl(k);
+    if (el) el.classList.toggle('collapsed', !!binCollapsed[k]);
+  }
+}
 
 function isLandscapeLayout() { const m = $('#main'); return !!(m && m.classList.contains('layout-landscape')); }
 function binEl(key) { return document.querySelector(`.bin[data-bin="${key}"]`); }
@@ -346,7 +375,10 @@ function loadBinSizes() {
     const o = JSON.parse(raw);
     if (o && o.portrait && o.landscape) {
       binSizes.portrait = { mediaW: o.portrait.mediaW || 0, transW: o.portrait.transW || 0, soundW: o.portrait.soundW || 0 };
-      binSizes.landscape = { leftW: o.landscape.leftW || 260, rightW: o.landscape.rightW || 260 };
+      binSizes.landscape = {
+        leftW: o.landscape.leftW || 260, rightW: o.landscape.rightW || 260,
+        transH: o.landscape.transH || 0, sndH: o.landscape.sndH || 0,
+      };
     }
   } catch (_) {}
 }
@@ -361,14 +393,22 @@ function ensureBinSplitters() {
     wrap.id = 'bin-splitters';
     main.appendChild(wrap);
   }
-  while (wrap.children.length < 3) {
+  // 0-2: the vertical dividers (portrait columns / landscape edges).
+  // 3-4: horizontal dividers inside the stacked right column (landscape only).
+  while (wrap.children.length < 5) {
+    const i = wrap.children.length;
     const s = document.createElement('div');
-    s.className = 'bin-splitter';
-    s.dataset.i = String(wrap.children.length);
+    s.className = 'bin-splitter' + (i >= 3 ? ' h' : '');
+    s.dataset.i = String(i);
     s.addEventListener('pointerdown', onBinSplitDown);
     wrap.appendChild(s);
   }
   return [...wrap.children];
+}
+
+function binHeightNow(key) {
+  const el = binEl(key);
+  return el ? el.getBoundingClientRect().height : 0;
 }
 
 function onBinSplitDown(e) {
@@ -378,7 +418,9 @@ function onBinSplitDown(e) {
   const mr = main.getBoundingClientRect();
   binSplitDrag = {
     i: Number(e.currentTarget.dataset.i), land: isLandscapeLayout(), left: mr.left, width: mr.width,
+    y: e.clientY,
     mediaW0: binSizes.portrait.mediaW, transW0: binSizes.portrait.transW, soundW0: binSizes.portrait.soundW,
+    transH0: binHeightNow('transitions'), sndH0: binHeightNow('sounds'), effH0: binHeightNow('effects'),
   };
   e.currentTarget.classList.add('dragging');
   try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
@@ -391,6 +433,30 @@ function onBinSplitMove(e) {
   if (!d) return;
   const x = e.clientX - d.left;
   const W = d.width;
+  if (d.land && d.i >= 3) {
+    // Stacked right column: drag a horizontal divider to re-proportion the panels.
+    const dy = e.clientY - d.y;
+    const minH = 64;
+    if (d.i === 3) {
+      // Transitions | Sounds: one grows as the other shrinks.
+      let transH = d.transH0 + dy;
+      let sndH = d.sndH0 - dy;
+      const total = d.transH0 + d.sndH0;
+      if (transH < minH) { transH = minH; sndH = total - minH; }
+      if (sndH < minH) { sndH = minH; transH = total - minH; }
+      binSizes.landscape.transH = Math.round(Math.max(minH, transH));
+      binSizes.landscape.sndH = Math.round(Math.max(minH, sndH));
+    } else {
+      // Sounds | Effects: Sounds grows into the space the Effects list leaves.
+      let sndH = d.sndH0 + dy;
+      const total = d.sndH0 + d.effH0;
+      if (sndH < minH) sndH = minH;
+      if (total - sndH < minH) sndH = total - minH;
+      binSizes.landscape.sndH = Math.round(Math.max(minH, sndH));
+    }
+    applyBinSizes();
+    return;
+  }
   if (d.land) {
     if (d.i === 0) binSizes.landscape.leftW = Math.round(clamp(x, 120, Math.max(140, W - binSizes.landscape.rightW - 160)));
     else binSizes.landscape.rightW = Math.round(clamp(W - x, 120, Math.max(140, W - binSizes.landscape.leftW - 160)));
@@ -441,14 +507,26 @@ function positionBinSplitters() {
     el.style.top = top + 'px';
     el.style.height = h + 'px';
   };
+  const placeH = (el, y) => {
+    el.style.display = '';
+    el.style.left = (rt.left - mr.left) + 'px';
+    el.style.width = rt.width + 'px';
+    el.style.top = (y - mr.top - 3) + 'px';
+    el.style.height = '6px';
+  };
   if (isLandscapeLayout()) {
     place(splitters[0], rm.right - mr.left);
     place(splitters[1], re.left - mr.left);
     splitters[2].style.display = 'none';
+    // Horizontal dividers inside the stacked right column (Transitions | Sounds | Effects).
+    placeH(splitters[3], rs.top);
+    placeH(splitters[4], re.top);
   } else {
     place(splitters[0], rm.right - mr.left);
     place(splitters[1], rt.right - mr.left);
     place(splitters[2], rs.right - mr.left);
+    splitters[3].style.display = 'none';
+    splitters[4].style.display = 'none';
   }
 }
 
@@ -462,9 +540,32 @@ function applyBinSizes() {
     binSizes.landscape.leftW = leftW;
     binSizes.landscape.rightW = rightW;
     main.style.gridTemplateColumns = `${leftW}px minmax(0,1fr) ${rightW}px`;
-    for (const k of ['media', 'transitions', 'sounds', 'effects']) {
-      const el = binEl(k);
-      if (el) el.style.flex = '';
+    const setFlex = (key, v) => {
+      const el = binEl(key);
+      if (!el) return;
+      el.style.flex = el.classList.contains('collapsed') ? '' : v;
+    };
+    setFlex('media', '');
+    // The stacked right column remembers panel heights (0 = share equally).
+    const transEl = binEl('transitions');
+    const col = transEl ? transEl.parentElement : null;
+    const colH = Math.max(140, (col && col.clientHeight) || main.clientHeight || 600);
+    let th = Math.round(binSizes.landscape.transH || 0);
+    let sh = Math.round(binSizes.landscape.sndH || 0);
+    if (th > 0 || sh > 0) {
+      const room = Math.max(128, colH - 64); // always leave something for Effects
+      if (th <= 0) th = Math.round(Math.max(64, (room - sh) / 2));
+      if (sh <= 0) sh = Math.round(Math.max(64, (room - th) / 2));
+      if (th + sh > room) sh = Math.max(64, sh - (th + sh - room));
+      binSizes.landscape.transH = th;
+      binSizes.landscape.sndH = sh;
+      setFlex('transitions', `0 0 ${th}px`);
+      setFlex('sounds', `0 0 ${sh}px`);
+      setFlex('effects', '1 1 0');
+    } else {
+      setFlex('transitions', '');
+      setFlex('sounds', '');
+      setFlex('effects', '');
     }
   } else {
     const mediaW = Math.round(clamp(binSizes.portrait.mediaW || W * 0.34, 110, Math.max(130, W - 260)));
@@ -517,6 +618,8 @@ function persistSettings() {
 /* ---------------- bootstrap ---------------- */
 async function init() {
   loadBinSizes();
+  loadBinCollapsed();
+  applyBinCollapsed();
   applyLayout(currentLayout());
   try { state.viewer.split = localStorage.getItem('cm_viewer_split') === '1'; } catch (_) {}
   const info = await api.init({});
@@ -667,6 +770,8 @@ async function loadBinFolder(key, dir, watch) {
 }
 
 async function refreshBin(key) {
+  // Transitions is a fixed fade list, not a folder-backed bin.
+  if (key === 'transitions') return;
   const bin = state.bins[key];
   bin.root = binDir(key);
   bin.cache.clear();
@@ -845,12 +950,15 @@ function renderBin(key) {
   const crumbs = bin.crumbs || [];
   const dirs = (bin.dirs || []).slice();
   if (key === 'media') {
-    // The user's IMAGES folder is their stills library — pin it to the top.
-    dirs.sort((a, b) => {
-      const ai = String(a.name).toUpperCase() === 'IMAGES' ? 0 : 1;
-      const bi = String(b.name).toUpperCase() === 'IMAGES' ? 0 : 1;
-      return ai - bi || String(a.name).localeCompare(String(b.name));
-    });
+    // The user's IMAGES folder is their stills library — pin it to the top, with
+    // INTERMISSIONS (the short cards between scenes) right under it.
+    const rank = (n) => {
+      const u = String(n).toUpperCase();
+      if (u === 'IMAGES') return 0;
+      if (u === 'INTERMISSIONS' || u === 'INTERSTITIALS') return 1;
+      return 2;
+    };
+    dirs.sort((a, b) => rank(a.name) - rank(b.name) || String(a.name).localeCompare(String(b.name)));
   }
 
   // Breadcrumb trail
@@ -937,6 +1045,7 @@ function renderBinCard(key, item, list) {
   const bin = state.bins[key];
   const card = document.createElement('div');
   card.className = 'base-item' + (key === 'sounds' ? ' sound' : '')
+    + (key !== 'sounds' && isIntermissionsPath(item.path) ? ' intermission' : '')
     + (bin.selected.has(item.path) ? ' selected' : '');
   card.dataset.path = item.path;
   card.draggable = true;
@@ -1001,7 +1110,7 @@ function renderBinCard(key, item, list) {
       addSoundItems([s], totalDuration());
     } else {
       const c = baseItemToTimeline(item);
-      c.origin = key;
+      c.origin = (key === 'media' && isIntermissionsPath(item.path)) ? 'transitions' : key;
       addTimelineItems([c], totalDuration());
     }
   });
@@ -1704,7 +1813,8 @@ function renderHybridGaps(body) {
 function renderAudioLane() {
   const body = $('#tl-audio-body');
   body.innerHTML = '';
-  if (!state.soundboard.length) return;
+  const soundFades = state.effects.some((e) => e.lane === 'sound');
+  if (!state.soundboard.length && !soundFades) return;
   const overlapIds = getOverlapIds();
   state.soundboard.forEach((s) => {
     const w = Math.max(6, sndDur(s) * state.pps);
@@ -1741,6 +1851,7 @@ function renderAudioLane() {
     body.appendChild(block);
     renderWaveform(block, s);
   });
+  renderEffects(body, 'sound');
 }
 
 async function renderWaveform(block, item) {
@@ -2469,15 +2580,18 @@ function updateToolbar() {
   }
   if (framingLabel) framingLabel.textContent = sel.length > 1 ? `Frame (${sel.length})` : 'Frame';
 
-  // Camera effect tools are per-type: a zoom panel and a shake panel; only the one
-  // matching the selected effect is shown.
+  // Camera effect tools are per-type: a zoom panel, a shake panel and a fade
+  // panel; only the one matching the selected effect is shown.
   const selEff = soleSelectedEffect();
-  const selZoom = !!(selEff && selEff.type !== 'shake');
+  const selZoom = !!(selEff && selEff.type === 'zoom');
   const selShake = !!(selEff && selEff.type === 'shake');
+  const selFade = !!(selEff && selEff.type === 'fade');
   const zoomSub = document.querySelector('.fx-sub[data-fx="zoom"]');
   const shakeSub = document.querySelector('.fx-sub[data-fx="shake"]');
+  const fadeSub = document.querySelector('.fx-sub[data-fx="fade"]');
   if (zoomSub) zoomSub.classList.toggle('hidden', !selZoom);
   if (shakeSub) shakeSub.classList.toggle('hidden', !selShake);
+  if (fadeSub) fadeSub.classList.toggle('hidden', !selFade);
   const poseSel = $('#btn-eff-pose');
   if (poseSel) { poseSel.disabled = !selZoom; poseSel.value = state.effectPose; }
   const ease = $('#btn-zoom-ease');
@@ -2485,6 +2599,12 @@ function updateToolbar() {
   if (ease) { ease.disabled = !selZoom; ease.textContent = selZoom && selEff.ease === 'linear' ? 'Linear' : 'Smooth'; }
   if (zbg) { zbg.disabled = !selZoom; zbg.textContent = selZoom && selEff.bg === 'blur' ? 'Blur BG' : 'Black BG'; }
   syncZoomLevelControls();
+  // A fade on the SOUND lane is always an audio fade, so its toggle is locked on.
+  const fAudio = $('#btn-fade-audio');
+  if (fAudio) {
+    fAudio.disabled = !selFade || (selFade && selEff.lane === 'sound');
+    fAudio.checked = !(selFade && selEff.audio === false);
+  }
   const shAmp = $('#shake-amp');
   const shNum = $('#shake-amp-num');
   const shPct = selShake ? String(Math.round(selEff.amp * 1000) / 10) : '4';
@@ -2779,9 +2899,27 @@ function linkAdjacentZoomPoses() {
 
 // The effect that governs the pose at t (active bands only; effects are bounded).
 function governingEffectAt(t) {
-  const act = state.effects.filter((e) => t >= (e.start || 0) && t < (e.start || 0) + (e.dur || 0));
+  // Fades are not pose effects: they must not decide the preview's backdrop.
+  const act = state.effects.filter((e) => e.type !== 'fade' && t >= (e.start || 0) && t < (e.start || 0) + (e.dur || 0));
   if (!act.length) return null;
   return act.reduce((a, b) => ((a.start || 0) > (b.start || 0) ? a : b));
+}
+
+// Black overlay over the preview that mirrors the exporter's fade filter: the
+// whole frame (picture and its blurred backdrop) dips to black, exactly like
+// ffmpeg's fade=t=in|out on the composed frame.
+function updatePreviewFade() {
+  const ov = $('#preview-fade');
+  if (!ov) return;
+  const seq = videoSegments();
+  const idx = srcInfo.bIndex;
+  const seg = idx >= 0 && idx < seq.length ? seq[idx] : null;
+  if (!seg) { ov.style.opacity = '0'; return; }
+  // Sound-lane fades are audio-only; the picture never dips for those.
+  const fades = state.effects.filter((e) => e.lane !== 'sound');
+  const a = TimelineOps.fadeAlphaAt(fades, previewPoseTime(), seg.start, seg.end);
+  const cover = Math.max(0, Math.min(1, 1 - a));
+  ov.style.opacity = cover > 0.001 ? String(cover) : '0';
 }
 
 // Paint the resolved camera pose on the preview (translate+scale about the top
@@ -2792,6 +2930,7 @@ function updatePreviewZoomTransform() {
   const cross = $('#zoom-cross');
   const hud = $('#zoom-hud');
   if (!el) return;
+  updatePreviewFade();
   const targets = [el, still].filter(Boolean);
   const pose = cameraPoseAt(previewPoseTime());
   const isId = Math.abs(pose.z - 1) < 1e-6 && Math.abs(pose.cx - 0.5) < 1e-6 && Math.abs(pose.cy - 0.5) < 1e-6;
@@ -2972,11 +3111,19 @@ function syncZoomLevelControls() {
 /* ---- Effect creation / rendering ----------------------------------------- */
 function sortEffects() { state.effects.sort((a, b) => (a.start || 0) - (b.start || 0)); }
 function makeEffect(defId, lane, start) {
-  const def = EFFECT_DEFS.find((d) => d.defId === defId) || EFFECT_DEFS[0];
+  const def = EFFECT_DEFS.find((d) => d.defId === defId)
+    || TRANSITION_DEFS.find((d) => d.defId === defId)
+    || EFFECT_DEFS[0];
   const base = {
     id: newId(), defId: def.defId, name: def.name,
-    lane: lane === 'hybrid' ? 'hybrid' : 'clips', start, dur: EFFECT_DUR_DEFAULT,
+    lane: lane === 'hybrid' ? 'hybrid' : (lane === 'sound' ? 'sound' : 'clips'),
+    start, dur: EFFECT_DUR_DEFAULT,
   };
+  if (def.type === 'fade') {
+    // Opacity ramp, linear like ffmpeg's fade filter. `audio` fades the clip's
+    // own sound too; a fade on the SOUND lane is always an audio fade.
+    return { ...base, type: 'fade', dir: def.dir === 'out' ? 'out' : 'in', audio: true, ease: 'linear' };
+  }
   if (def.type === 'shake') {
     return {
       ...base, type: 'shake',
@@ -3002,7 +3149,9 @@ function addEffect(defId, lane, start) {
   renderTimeline();
   setStatus(eff.type === 'shake'
     ? `${eff.name} added — drag/extend the band over the moment to shake.`
-    : `${eff.name} added — extend/push the band, then scroll the preview to zoom and drag to pan.`);
+    : eff.type === 'fade'
+      ? `${eff.name} added — drag/extend the band to set how long the fade lasts.`
+      : `${eff.name} added — extend/push the band, then scroll the preview to zoom and drag to pan.`);
   return eff;
 }
 function selectEff(id, addSel) {
@@ -3029,15 +3178,20 @@ function renderEffects(body, lane) {
   for (const e of state.effects) {
     if (e.lane !== lane) continue;
     const block = document.createElement('div');
-    block.className = 'effectband' + (state.selectedEff.has(e.id) ? ' selected' : '');
+    block.className = 'effectband' + (e.type === 'fade' ? ' fade' : '')
+      + (state.selectedEff.has(e.id) ? ' selected' : '');
     block.style.left = laneX(e.start || 0) + 'px';
     block.style.width = Math.max(6, (e.dur || 0) * state.pps) + 'px';
     block.title = e.type === 'shake'
       ? `${e.name} · ${Math.round(e.amp * 1000) / 10}% · ${e.freq} Hz`
-      : `${e.name}: ${e.from.z.toFixed(2)}× → ${e.to.z.toFixed(2)}×`;
+      : e.type === 'fade'
+        ? `${e.name} · ${(e.dur || 0).toFixed(2)}s${e.lane === 'sound' ? ' (sound)' : (e.audio === false ? ' (picture only)' : '')}`
+        : `${e.name}: ${e.from.z.toFixed(2)}× → ${e.to.z.toFixed(2)}×`;
     const head = document.createElement('div');
     head.className = 'effectband-head';
-    head.textContent = e.type === 'shake' ? e.name : e.name.replace(/^Zoom /, 'Z ');
+    head.textContent = e.type === 'shake' ? e.name
+      : e.type === 'fade' ? (e.dir === 'out' ? 'F Out' : 'F In')
+        : e.name.replace(/^Zoom /, 'Z ');
     block.appendChild(head);
     const hl = document.createElement('div'); hl.className = 'effect-handle l';
     hl.title = 'Extend left';
@@ -3123,6 +3277,64 @@ function renderEffectsBin() {
   }
   list.appendChild(grid);
   updateFreezeButton();
+}
+
+// --- Transitions panel (fades; drag onto MAIN/ALT, or onto SOUND for an audio fade) ---
+function renderTransitionsBin() {
+  const list = $('#transitions-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const grid = document.createElement('div');
+  grid.className = 'effects-grid';
+  const defs = TRANSITION_DEFS.slice().sort((a, b) => {
+    const dr = ratingOf(effectLibKey(b.defId)) - ratingOf(effectLibKey(a.defId));
+    return dr || a.name.localeCompare(b.name);
+  });
+  for (const def of defs) {
+    const card = document.createElement('div');
+    card.className = 'effect-tile transition-tile';
+    card.draggable = true;
+    card.title = `Drag onto a lane to add ${def.name} — on SOUND it fades the audio only`;
+    const ic = document.createElement('span');
+    ic.className = 'effect-tile-icon';
+    ic.textContent = def.dir === 'out' ? '◑' : '◐';
+    const nm = document.createElement('span');
+    nm.className = 'effect-tile-name';
+    nm.textContent = def.name;
+    const rating = ratingOf(effectLibKey(def.defId));
+    card.append(ic, nm);
+    if (rating) {
+      const st = document.createElement('span');
+      st.className = 'effect-tile-stars';
+      st.textContent = '★'.repeat(rating);
+      card.append(st);
+    }
+    const items = [{ defId: def.defId, name: def.name, duration: EFFECT_DUR_DEFAULT }];
+    card.addEventListener('dragstart', (e) => {
+      const payload = JSON.stringify({ kind: 'effects', items });
+      e.dataTransfer.setData('application/x-clipmerger', payload);
+      e.dataTransfer.setData('text/plain', payload);
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setDragImage(emptyDragImage(), 0, 0);
+      buildDragCard(card, e, 1);
+      binDragActive = true;
+      pendingDrag = { kind: 'effects', items };
+    });
+    card.addEventListener('dblclick', () => addEffect(def.defId, 'clips', state.playhead));
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        title: def.name,
+        rating: ratingOf(effectLibKey(def.defId)),
+        onRate: async (n) => { await setRating(effectLibKey(def.defId), n); renderTransitionsBin(); },
+      });
+    });
+    grid.appendChild(card);
+  }
+  list.appendChild(grid);
 }
 
 // Reflect the active clip's Mute and framing (fit) onto the 9:16 program preview.
@@ -4925,9 +5137,14 @@ function dropInsertTime(e, lane) {
 function dropGhostTime(e, lane) {
   return pendingDrag && pendingDrag.kind === 'effects' ? dropTimeAt(e) : dropInsertTime(e, lane);
 }
-// A bin drag that can't land on the hovered lane (video over SOUND).
+// A bin drag that can't land on the hovered lane (video over SOUND). A Fade is
+// the one effect that also makes sense on SOUND: there it fades the audio.
 function dropRejectedForLane(lane) {
-  return lane === 'sounds' && pendingDrag && pendingDrag.kind !== 'sounds';
+  if (!pendingDrag) return false;
+  const items = Array.isArray(pendingDrag.items) ? pendingDrag.items : [];
+  const isFade = pendingDrag.kind === 'effects'
+    && items.some((x) => String(x && x.defId).startsWith('fade'));
+  return lane === 'sounds' && pendingDrag.kind !== 'sounds' && !isFade;
 }
 
 function handleDrop(e) {
@@ -4950,9 +5167,13 @@ function handleDrop(e) {
     const arr = Array.isArray(payload.items) ? payload.items : [];
     hideDropProxy();
     if (kind === 'effects') {
-      if (toSounds) { setStatus('Effects go on a video lane (MAIN or ALT).'); return; }
       const defId = arr[0] && arr[0].defId;
-      addEffect(defId, toHyb ? 'hybrid' : 'clips', t);
+      const isFade = String(defId || '').startsWith('fade');
+      if (toSounds && !isFade) {
+        setStatus('Effects go on a video lane (MAIN or ALT) — a Fade can also go on SOUND.');
+        return;
+      }
+      addEffect(defId, toSounds ? 'sound' : (toHyb ? 'hybrid' : 'clips'), t);
       return;
     }
     if (kind === 'sounds') {
@@ -4962,7 +5183,7 @@ function handleDrop(e) {
     } else {
       if (toSounds) { setStatus('SOUND lane takes audio only — drop this on MAIN or ALT.'); return; }
       const items = arr.filter((x) => x && x.path).map(toHyb ? baseHybClip : baseItemToTimeline);
-      items.forEach((it) => { it.origin = kind; });
+      items.forEach((it) => { it.origin = isIntermissionsPath(it.path) ? 'transitions' : kind; });
       if (toHyb) addHybridItems(items, t); else addTimelineItems(items, t);
     }
     return;
@@ -4987,7 +5208,7 @@ function handleDrop(e) {
       if (video.includes(p.path)) {
         if (toSounds) continue; // SOUND lane ignores video
         const it = toHyb ? baseHybClip(p) : baseItemToTimeline(p);
-        it.origin = 'media';
+        it.origin = isIntermissionsPath(p.path) ? 'transitions' : 'media';
         vItems.push(it);
       } else {
         const it = toHyb ? baseHybSound(p) : baseSoundFromItem(p);
@@ -5260,6 +5481,24 @@ function wireEvents() {
     zNumEl.addEventListener('change', (e) => setZoomLevel(e.target.value, true));
   }
 
+  // Fade Audio: a fade on a clip lane can also fade the clip's own sound. On the
+  // SOUND lane the fade is always audio-only, so the box is locked on there.
+  const fadeAudioEl = $('#btn-fade-audio');
+  if (fadeAudioEl) {
+    fadeAudioEl.addEventListener('change', () => {
+      const eff = soleSelectedEffect();
+      if (!eff || eff.type !== 'fade' || eff.lane === 'sound') return;
+      snapshot();
+      eff.audio = fadeAudioEl.checked;
+      commit(fadeAudioEl.checked ? 'Fade audio on' : 'Fade audio off');
+      renderTimeline();
+      updateToolbar();
+      setStatus(fadeAudioEl.checked
+        ? 'The fade also fades the clip\'s sound.'
+        : 'The fade affects the picture only.');
+    });
+  }
+
   // Volume applies live while dragging (input) and commits once on release
   // (change), so the preview reflects the dB immediately.
   function applyVol(db, commitHistory) {
@@ -5302,8 +5541,13 @@ function wireEvents() {
   // bins
   $$('.bin').forEach((section) => {
     const key = section.dataset.bin;
-    $('.bin-toggle', section).addEventListener('click', () => { section.classList.toggle('collapsed'); applyBinSizes(); });
-    if (key === 'effects') return; // fixed list, not folder-backed
+    $('.bin-toggle', section).addEventListener('click', () => {
+      section.classList.toggle('collapsed');
+      binCollapsed[key] = section.classList.contains('collapsed');
+      saveBinCollapsed();
+      applyBinSizes();
+    });
+    if (key === 'effects' || key === 'transitions') return; // fixed lists, not folder-backed
     $('.bin-refresh', section).addEventListener('click', () => {
       const bin = state.bins[key];
       bin.cache.clear();
@@ -5326,10 +5570,11 @@ function wireEvents() {
       const probed = await api.probe({ ffprobePath: state.settings.ffprobePath, files });
       const items = probed.filter((p) => !p.error);
       if (key === 'sounds') addSoundItems(items.map((it) => { const s = baseSoundFromItem(it); s.origin = 'sounds'; return s; }), totalDuration());
-      else addTimelineItems(items.map((it) => { const c = baseItemToTimeline(it); c.origin = key; return c; }), totalDuration());
+      else addTimelineItems(items.map((it) => { const c = baseItemToTimeline(it); c.origin = isIntermissionsPath(it.path) ? 'transitions' : key; return c; }), totalDuration());
     });
   });
   renderEffectsBin();
+  renderTransitionsBin();
 
   $('#set-outdir-pick').addEventListener('click', async () => {
     const d = await api.chooseDir();

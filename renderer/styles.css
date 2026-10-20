@@ -170,6 +170,9 @@ button > .icon, .bin-toggle > .icon { pointer-events: none; }
   background: transparent; transition: background .12s;
 }
 .bin-splitter:hover::after, .bin-splitter.dragging::after { background: var(--accent); opacity: .75; }
+/* Horizontal dividers between the stacked right-hand panels (landscape layout). */
+.bin-splitter.h { cursor: ns-resize; }
+.bin-splitter.h::after { left: 0; right: 0; top: 2px; bottom: auto; width: auto; height: 2px; }
 
 #viewer { grid-area: viewer; position: relative; background: #0c0d10; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; }
 .viewer-pane { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; }
@@ -263,6 +266,10 @@ button > .icon, .bin-toggle > .icon { pointer-events: none; }
 }
 .base-item:hover { border-color: var(--line2); }
 .base-item.selected { border-color: var(--blue); box-shadow: inset 0 -3px 0 var(--blue); }
+/* Intermissions (clips from the INTERMISSIONS folder) keep the blue "transition"
+   look of the old Transitions bin, in the bin and on the timeline. */
+.base-item.intermission { background: linear-gradient(180deg, #1d3350, #17283f); border-color: #3a6ea5; }
+.base-item.intermission .bname { color: #dce9ff; }
 .base-item .thumb { width: 100%; height: 48px; flex: 0 0 auto; background: var(--bg3); border-radius: 3px; object-fit: cover; display: block; -webkit-user-drag: none; }
 .base-item .thumb.placeholder { background: repeating-linear-gradient(45deg, var(--bg3), var(--bg3) 4px, var(--bg) 4px, var(--bg) 8px); }
 .bthumb { position: relative; min-width: 0; }
@@ -318,6 +325,8 @@ button > .icon, .bin-toggle > .icon { pointer-events: none; }
    padding instead of the foreground's own black fill. */
 #viewer-program.bg-on #preview { background: transparent; }
 #viewer-program.bg-on #preview-still { background: transparent; }
+/* Fade overlay: the composed frame dips to black, mirroring ffmpeg's fade filter. */
+#preview-fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 3; }
 #preview-b { visibility: hidden; z-index: 1; }
 #preview { visibility: visible; z-index: 2; }
 #preview-media { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 100%; max-height: 100%; background: #000; }
@@ -813,6 +822,15 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .effect-handle.r { right: 0; }
 .effect-handle::after { content: ''; position: absolute; top: 40%; bottom: 40%; left: 4px; width: 2px; background: rgba(240,230,255,.85); border-radius: 1px; }
 .effect-handle:hover::after { background: #fff; }
+/* Fade band: a ramp into/out of black, so it reads differently from a camera band. */
+.effectband.fade {
+  background: linear-gradient(180deg, rgba(8,9,12,.9), rgba(8,9,12,.55));
+  border-color: rgba(196,206,222,.85);
+}
+.effectband.fade .effectband-head {
+  background: linear-gradient(180deg, rgba(34,39,48,.95), rgba(34,39,48,.6));
+  color: #dde5f2;
+}
 #bin-effects.collapsed .bin-body { display: none; }
 
 /* A/D hint for the selected item: edge mode vs global jumping mode. */

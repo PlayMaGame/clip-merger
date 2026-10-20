@@ -78,7 +78,7 @@ function mergeClipsByPriority(mainSeq, hybSeq) {
 // fills the output frame the blurred background is covered and invisible — so
 // it must not force a needless re-encode (the exact-dims check already covers
 // the case where the frame would actually need scaling).
-function chooseMode({ vOk, aOk, inKf, outKf, normalize, speed = 1, volDb = 0, zoom = null, camera = null }) {
+function chooseMode({ vOk, aOk, inKf, outKf, normalize, speed = 1, volDb = 0, zoom = null, camera = null, fade = null }) {
   let mode = 'reencode';
   if (vOk && inKf && outKf) mode = normalize ? 'vlossless' : 'lossless';
   else if (vOk) mode = 'reencode';
@@ -90,6 +90,9 @@ function chooseMode({ vOk, aOk, inKf, outKf, normalize, speed = 1, volDb = 0, zo
   if (zoom) mode = 'reencode';
   // camera effects (adjustment layers) animate scale/pan over this segment
   if (camera) mode = 'reencode';
+  // a fade changes the pixels of every frame in its band — a filter can't run on
+  // a stream copy
+  if (fade && fade.length) mode = 'reencode';
   // a non-zero volume re-encodes audio — lossless stream-copy can't carry gain
   if (mode === 'lossless' && Math.abs(volDb) > 1e-3) mode = 'vlossless';
   return mode;
@@ -306,12 +309,37 @@ function governingEffectAt(effects, t) {
   return act.reduce((a, b) => ((a.start || 0) > (b.start || 0) ? a : b));
 }
 
+// Video fade filters for one segment, in local output time. `st` may be negative
+// when a band started before the segment: ffmpeg then reads the ramp as already
+// part way through, so a fade stretched across two clips keeps ramping instead of
+// restarting inside the second one. Mirrors TimelineOps.fadeAmount exactly.
+function fadeChain(fades) {
+  if (!fades || !fades.length) return '';
+  let s = '';
+  for (const f of fades) {
+    s += `,fade=t=${f.dir === 'out' ? 'out' : 'in'}:st=${num4(f.start)}:d=${num4(Math.max(1e-3, f.dur))}`;
+  }
+  return s;
+}
+
+// The same windows as audio fades. `audio:false` means the effect is picture only.
+function afadeChain(fades) {
+  if (!fades || !fades.length) return [];
+  const out = [];
+  for (const f of fades) {
+    if (f.audio === false) continue;
+    out.push(`afade=t=${f.dir === 'out' ? 'out' : 'in'}:st=${num4(f.start)}:d=${num4(Math.max(1e-3, f.dur))}`);
+  }
+  return out;
+}
+
 function cutArgs(src, inPoint, outPoint, cfg) {
-  const { mode, encoder, encoderOpts, W, H, FPS, normalize, mute, speed = 1, fit = 'blur', volumeDb = 0, zoom = null, camera = null, still = false } = cfg;
+  const { mode, encoder, encoderOpts, W, H, FPS, normalize, mute, speed = 1, fit = 'blur', volumeDb = 0, zoom = null, camera = null, still = false, fade = null } = cfg;
   const dur = Math.max(0.001, outPoint - inPoint);
   const slow = Math.abs(speed - 1) > 1e-6;
   const outDur = dur / speed; // duration after the speed change
   const blur = fit === 'blur';
+  const fadeV = fadeChain(fade);
   let vmap = '0:v:0';
   const a = ['-hide_banner', '-loglevel', 'error', '-nostats', '-y'];
   if (still) {
@@ -347,12 +375,12 @@ function cutArgs(src, inPoint, outPoint, cfg) {
           `[0:v]${pre}fps=${FPS},split=2[fg0][bg0];` +
           `[bg0]scale=${W}:${H}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${W}:${H},boxblur=20:5[bg];` +
           `[fg0]${fgBase},${sc}[fg];` +
-          `[bg][fg]${ov},setsar=1[v]`);
+          `[bg][fg]${ov},setsar=1${fadeV}[v]`);
       } else {
         a.push('-filter_complex',
           `color=black:s=${W}x${H}:r=${FPS}[bg];` +
           `[0:v]${pre}fps=${FPS},${fgBase},${sc}[fg];` +
-          `[bg][fg]${ov}:shortest=1,setsar=1[v]`);
+          `[bg][fg]${ov}:shortest=1,setsar=1${fadeV}[v]`);
       }
       vmap = '[v]';
       a.push('-map', '[v]');
@@ -375,12 +403,12 @@ function cutArgs(src, inPoint, outPoint, cfg) {
           `[0:v]${base},split=2[bb][f];` +
           `[bb]boxblur=20:5[bg];` +
           `[f]${sc}[fg];` +
-          `[bg][fg]${ov},setsar=1[v]`);
+          `[bg][fg]${ov},setsar=1${fadeV}[v]`);
       } else {
         a.push('-filter_complex',
           `color=black:s=${W}x${H}:r=${FPS}[bg];` +
           `[0:v]${base},${sc}[fg];` +
-          `[bg][fg]${ov}:shortest=1,setsar=1[v]`);
+          `[bg][fg]${ov}:shortest=1,setsar=1${fadeV}[v]`);
       }
       vmap = '[v]';
       a.push('-map', '[v]');
@@ -393,7 +421,7 @@ function cutArgs(src, inPoint, outPoint, cfg) {
         `[0:v]${pre}fps=${FPS},split=2[fg][bg];` +
         `[bg]scale=${W}:${H}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${W}:${H},boxblur=20:5[bg2];` +
         `[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2[fg2];` +
-        `[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1[v]`);
+        `[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1${fadeV}[v]`);
       vmap = '[v]';
       a.push('-map', '[v]');
       if (!mute) a.push('-map', '0:a?');
@@ -402,7 +430,7 @@ function cutArgs(src, inPoint, outPoint, cfg) {
         ...(slow ? [`setpts=PTS/${speed}`] : []),
         `fps=${FPS}`, `scale=${W}:${H}:force_original_aspect_ratio=increase`, `crop=${W}:${H}`, 'setsar=1',
       ].join(',');
-      a.push('-vf', vf);
+      a.push('-vf', vf + fadeV);
     }
     a.push('-c:v', encoder, ...encoderOpts, '-profile:v', 'high', '-pix_fmt', 'yuv420p',
       '-g', '120', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709');
@@ -421,6 +449,8 @@ function cutArgs(src, inPoint, outPoint, cfg) {
     if (Math.abs(volumeDb) > 1e-3) af.push(`volume=${linGain(volumeDb).toFixed(4)}`);
     if (normalize) af.push(`loudnorm=${LOUD}`);
     if (slow) af.push(atempoChain(speed));
+    // Fades are timed in output time, so they come after the speed change.
+    af.push(...afadeChain(fade));
     af.push('aresample=48000');
     a.push('-af', af.join(','), '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2');
   }
@@ -504,6 +534,9 @@ async function exportProject(opts) {
 
   const clips = mergeClipsByPriority(mainSeq, hybSeq);
   const effects = (project.effects || []).filter((e) => e && (e.type === 'shake' || (e.from && e.to)));
+  // Fade bands (transitions) are kept apart from the camera effects: they change
+  // the frame's opacity, not the pose, and they own their own filter chain.
+  const fadeBands = (project.effects || []).filter((e) => e && e.type === 'fade' && Math.max(0, e.dur || 0) > 1e-6);
   if (!clips.length) throw new Error('No clips to export.');
 
   const s = project.settings || {};
@@ -580,15 +613,20 @@ async function exportProject(opts) {
     const seg = path.join(workDir, `seg_${String(segNo).padStart(3, '0')}.mp4`);
 
     // Camera effects (adjustment layers) animating scale/pan over this segment.
+    const segStart = vis.start;
+    const segEnd = segStart + outDur;
     let camera = null;
     if (effects.length) {
-      const segStart = vis.start;
-      const segEnd = segStart + outDur;
       if (cameraActive(effects, segStart, segEnd)) {
         const bgEff = governingEffectAt(effects, (segStart + segEnd) / 2);
         camera = buildCameraExprs(effects, segStart, segEnd, bgEff && bgEff.bg === 'blur' ? 'blur' : 'black');
       }
     }
+    // Fades over this segment, in local output time. Sound-lane fades are mixed
+    // with the soundboard later, so they are not part of the picture chain.
+    const fades = fadeBands.length
+      ? TimelineOps.fadeWindowsForSegment(fadeBands.filter((e) => e.lane !== 'sound'), segStart, segEnd)
+      : [];
 
     const still = TimelineOps.isStill(c);
     const stillKind = c.kind === 'freeze' || c.stillKind === 'freeze';
@@ -612,7 +650,7 @@ async function exportProject(opts) {
       const inKf = isKeyframe(inPoint, kfs, 0.05);
       const outKf = isKeyframe(outPoint, kfs, 0.05) || Math.abs(outPoint - c.duration) < 0.05;
       mode = chooseMode({
-        vOk, aOk, inKf, outKf, normalize, speed, volDb: c.volume || 0, zoom: c.zoom || null, camera,
+        vOk, aOk, inKf, outKf, normalize, speed, volDb: c.volume || 0, zoom: c.zoom || null, camera, fade: fades,
       });
     }
 
@@ -625,7 +663,7 @@ async function exportProject(opts) {
       mode, encoder: enc, encoderOpts: encOpts, W, H, FPS, normalize,
       mute: still ? true : !!c.mute,
       speed: still ? 1 : speed, fit: c.fit || 'blur', volumeDb: volDb,
-      zoom: still ? null : (c.zoom || null), camera, still,
+      zoom: still ? null : (c.zoom || null), camera, still, fade: fades,
     }).concat([seg]);
     const runSeg = async (enc, encOpts) => {
       const args = buildArgs(enc, encOpts);
@@ -709,15 +747,26 @@ async function exportProject(opts) {
 
     const parts = [];
     const labels = [];
+    // Fades dropped on the SOUND lane fade that sound's audio (no picture, so no
+    // toolbar toggle — the fade is the point). Timed in output time, after adelay.
+    const soundFades = fadeBands.filter((e) => e.lane === 'sound');
     sb.forEach((item, idx) => {
       const outStart = item.startTime || 0; // output time == timeline time (gaps padded)
       const delay = Math.max(0, Math.round(outStart * 1000));
       // Volume is stored in dB; legacy projects used a linear `gain`.
       const gainDb = item.volume != null ? item.volume : (item.gain != null ? toDb(item.gain) : 0);
       const lbl = `sb${idx}`;
+      const ss = item.srcStart || 0;
+      const se = item.srcEnd != null ? item.srcEnd
+        : (item.endTime != null ? item.endTime : (item.duration || 1e9));
+      const span = Math.max(0.05, se - ss);
+      const fadeAf = soundFades
+        .filter((e) => (e.start || 0) < outStart + span - 1e-6 && (e.start || 0) + Math.max(0, e.dur || 0) > outStart + 1e-6)
+        .map((e) => `afade=t=${e.dir === 'out' ? 'out' : 'in'}:st=${num4(e.start || 0)}:d=${num4(Math.max(1e-3, e.dur || 0))}`)
+        .join(',');
       parts.push(
         `[${idx + 1}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-        `volume=${linGain(gainDb).toFixed(4)},adelay=${delay}|${delay}[${lbl}]`);
+        `volume=${linGain(gainDb).toFixed(4)},adelay=${delay}|${delay}${fadeAf ? ',' + fadeAf : ''}[${lbl}]`);
       labels.push(`[${lbl}]`);
     });
     const mixInputs = ['[0:a]', ...labels].join('');
@@ -745,4 +794,4 @@ async function exportProject(opts) {
   return outputFile;
 }
 
-module.exports = { exportProject, cancelExport, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, chooseMode, buildRenderPlan, zoomScaleExpr, buildCameraExprs, cameraActive, governingEffectAt, shakeExpr };
+module.exports = { exportProject, cancelExport, visualToOutput, cutArgs, srcStartOf, srcEndOf, speedOf, mergeClipsByPriority, editorTotal, chooseMode, buildRenderPlan, zoomScaleExpr, buildCameraExprs, cameraActive, governingEffectAt, shakeExpr, fadeChain, afadeChain };

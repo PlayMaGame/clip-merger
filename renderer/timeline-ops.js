@@ -244,7 +244,7 @@
     if (!effects || !effects.length) return { ...IDENT };
     const active = effects.filter((e) => t >= (e.start || 0) && t < effEnd(e));
     if (!active.length) return { ...IDENT };
-    const zooms = active.filter((e) => e.type !== 'shake').sort((a, b) => (a.start || 0) - (b.start || 0));
+    const zooms = active.filter((e) => e.type !== 'shake' && e.type !== 'fade').sort((a, b) => (a.start || 0) - (b.start || 0));
     let z = 1, ux = 0.5, uy = 0.5;
     for (const e of zooms) {
       const p = rampPose(e, t);
@@ -349,6 +349,56 @@
     return null;
   }
 
+  // Fades. A fade band ramps the picture's opacity: 1 is the untouched frame,
+  // 0 is black. Inside the band it ramps 0→1 ("in") or 1→0 ("out"); before the
+  // band the frame is untouched, and after an "out" band it stays black. That is
+  // exactly ffmpeg's `fade` filter, so the preview overlay and the render agree.
+  function fadeAmount(e, t) {
+    const a = e.start || 0;
+    const dur = Math.max(1e-6, e.dur || 0);
+    if (t < a) return 1;
+    const p = Math.max(0, Math.min(1, (t - a) / dur));
+    return e.dir === 'out' ? 1 - p : p;
+  }
+
+  // Alpha for the frame at `t` inside one segment. A fade only paints in the
+  // segment it overlaps: a completed fade-out holds black until that segment
+  // ends, never into the next clip (the exporter also works segment by segment).
+  function fadeAlphaAt(effects, t, segStart, segEnd) {
+    let a = 1;
+    for (const e of effects || []) {
+      if (!e || e.type !== 'fade') continue;
+      const b0 = e.start || 0;
+      const b1 = b0 + Math.max(0, e.dur || 0);
+      if (segEnd != null && b0 >= segEnd - 1e-9) continue;
+      if (segStart != null && b1 <= segStart + 1e-9) continue;
+      a *= fadeAmount(e, t);
+    }
+    return Math.max(0, Math.min(1, a));
+  }
+
+  // The fade windows one exported segment needs, in the segment's own output
+  // time (ffmpeg's `fade` filter runs on the segment's local clock). The band's
+  // own start and length are kept, not clipped to the segment: a fade stretched
+  // across two clips must carry on ramping in the second one, and ffmpeg reads a
+  // negative `st` as "already part way through" the ramp.
+  function fadeWindowsForSegment(effects, segStart, segEnd) {
+    const out = [];
+    for (const e of effects || []) {
+      if (!e || e.type !== 'fade') continue;
+      const b0 = e.start || 0;
+      const b1 = b0 + Math.max(0, e.dur || 0);
+      if (b1 <= segStart + 1e-6 || b0 >= segEnd - 1e-6) continue;
+      out.push({
+        dir: e.dir === 'out' ? 'out' : 'in',
+        start: b0 - segStart,
+        dur: Math.max(1e-6, b1 - b0),
+        audio: e.audio !== false,
+      });
+    }
+    return out;
+  }
+
   // Restore a history snapshot into the document shape. Every lane that
   // snapshotDoc captures must be restored here — keeping this pure makes the
   // "undo must restore effects too" contract unit-testable.
@@ -370,7 +420,7 @@
     return !!(item && (item.still === true || item.kind === 'image' || item.kind === 'freeze'));
   }
 
-  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, picturePointAt, screenToPicture, ZOOM_MIN, ZOOM_MAX, nextCutTarget, sourceConflict, restoreDocument, isStill };
+  const api = { rippleOpen, resolveInsertTime, laneAccepts, kindForLane, durOf, sndDur, hybStartOf, hybDurOf, setHybStart, findOverlaps, visibleSegments, zoomFactor, effectPoseAt, rampPose, shakeOffset, clampZoom, fitRect, framingZoomTransform, picturePointAt, screenToPicture, ZOOM_MIN, ZOOM_MAX, nextCutTarget, fadeAmount, fadeAlphaAt, fadeWindowsForSegment, sourceConflict, restoreDocument, isStill };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TimelineOps = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
