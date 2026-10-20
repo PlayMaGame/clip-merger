@@ -316,11 +316,23 @@
       </div>
       <div id="mic-mini" class="mic-mini">
         <div id="mic-ruler" class="mic-ruler"><canvas id="mic-ruler-canvas"></canvas></div>
-        <div class="mic-lane" data-track="main"><span class="mic-lane-label">MAIN</span><canvas id="mic-wave-main"></canvas></div>
-        <div class="mic-lane alt" data-track="alt"><span class="mic-lane-label">ALT</span><canvas id="mic-wave-alt"></canvas></div>
+        <div class="mic-lane active" data-track="main"><span class="mic-lane-label">MAIN</span><canvas id="mic-wave-main"></canvas></div>
         <div id="mic-playhead" class="mic-playhead"></div>
       </div>
-      <p class="muted mic-hint">Record punches into the active track at the playhead. Drag a take to move it, drag its edges to trim, then Split / Delete to shape it. Ctrl+wheel zooms and Shift+wheel pans. Save mixes both tracks into one WAV.</p>
+      <div id="mic-scrub" class="mic-scrub" role="slider" tabindex="0"
+           title="Grab &amp; drag: the mic timeline slides under the playhead — or click a spot on the lane to jump there"
+           aria-label="Mic timeline shuttle — drag to slide the timeline beneath the playhead">
+        <div class="scrub-nav scrub-nav-l">
+          <button id="mic-scrub-start" class="scrub-btn" title="Jump to the start" aria-label="Jump to the start"><svg class="icon" aria-hidden="true"><use href="#i-skip-start"/></svg></button>
+          <button id="mic-scrub-prev" class="scrub-btn" title="Back to the previous cut (A)" aria-label="Back to the previous cut"><svg class="icon" aria-hidden="true"><use href="#i-step-back"/></svg></button>
+        </div>
+        <div class="pad-tex" aria-hidden="true"></div>
+        <div class="scrub-nav scrub-nav-r">
+          <button id="mic-scrub-next" class="scrub-btn" title="Forward to the next cut (D)" aria-label="Forward to the next cut"><svg class="icon" aria-hidden="true"><use href="#i-step-fwd"/></svg></button>
+          <button id="mic-scrub-end" class="scrub-btn" title="Jump to the end" aria-label="Jump to the end"><svg class="icon" aria-hidden="true"><use href="#i-skip-end"/></svg></button>
+        </div>
+      </div>
+      <p class="muted mic-hint">Record punches into the take at the playhead. Drag a take to move it, drag its edges to trim, then Split / Delete to shape it. Double-click a take to delete it, or a gap to close it. Space plays, R records, Ctrl+wheel zooms, middle-drag pans. Save writes one WAV.</p>
       <div class="modal-actions">
         <button id="mic-cancel" class="btn ghost">Cancel</button>
         <button id="mic-save" class="btn accent">Save WAV</button>

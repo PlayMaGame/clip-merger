@@ -3,6 +3,33 @@
 All notable changes to Clip Merger are documented here.
 Format follows Keep a Changelog; the project uses a SemVer-ish scheme.
 
+## [0.9.3] - 2026-10-20
+
+### Changed
+- **Mic recorder is now a single-lane editor with the main jog bar.** The ALT lane is
+  gone; the editor has one MAIN lane plus the same start / prev cut / next cut / end
+  shuttle bar as the main timeline. Save writes that one take as a 48 kHz mono WAV.
+
+### Fixed
+- **Dragging a take's edge no longer trims the wrong side.** The pointer passed
+  `left`/`right` while the model matched `l`, so every edge drag shortened the right
+  edge. Edges now move the side you grabbed.
+- **Edges can be dragged back out.** Takes keep the whole recorded sample buffer and
+  trim a [from, to) window, so trimming is reversible — after a split you can pull an
+  edge back over audio instead of losing it.
+- **Waveforms are much easier to read.** Each take is normalized to its own peak
+  (up to 8×) before drawing; quiet recordings fill the lane. Audio data is unchanged.
+- **Space always plays/pauses in the mic editor**, even when a toolbar button still
+  has focus; **R** now toggles recording.
+
+### Added
+- **Double-click to delete or close gaps.** Double-click a take to delete it, or a gap
+  to ripple later takes left and close it.
+
+### Removed
+- Shift+wheel panning; pan by dragging with the middle mouse button, like the main
+  timeline.
+
 ## [0.9.2] - 2026-10-20
 
 ### Changed

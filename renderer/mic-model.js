@@ -1,6 +1,10 @@
-/* Two-track mic take model — pure helpers shared by the recorder UI and tests.
-   A clip is { id, track, start, samples: Float32Array }. `start` is the clip's
-   position on the mini timeline in seconds; the audio itself is self-contained. */
+/* Mic take model — pure helpers shared by the recorder UI and tests.
+   A clip is { id, track, start, samples: Float32Array, from?, to? }. `start` is
+   the clip's position on the mini timeline in seconds; `samples` is the whole
+   recorded take and [from, to) is the audible window into it. Splitting and
+   trimming only move that window, so an edge can always be dragged back out
+   (like the main timeline's srcStart/srcEnd). Clips without from/to play all
+   samples. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.MicModel = factory();
@@ -8,8 +12,17 @@
   const MIN_LEN = 0.05;
   const EPS = 1e-9;
 
+  function clipFrom(c) { return c.from == null ? 0 : c.from; }
+  function clipTo(c) { return c.to == null ? c.samples.length : c.to; }
+  function clipSamples(c) {
+    const from = clipFrom(c);
+    const to = clipTo(c);
+    if (from === 0 && to === c.samples.length) return c.samples;
+    return c.samples.subarray(from, to);
+  }
+
   function clipDur(c, sampleRate) {
-    return c.samples.length / sampleRate;
+    return (clipTo(c) - clipFrom(c)) / sampleRate;
   }
 
   function clipEnd(c, sampleRate) {
@@ -26,29 +39,37 @@
     const dur = clipDur(c, sampleRate);
     const local = atAbs - c.start;
     if (local < MIN_LEN || dur - local < MIN_LEN) return [c];
-    const cut = Math.max(1, Math.min(c.samples.length - 1, Math.round(local * sampleRate)));
+    const from = clipFrom(c);
+    const to = clipTo(c);
+    const cut = Math.max(1, Math.min(to - from - 1, Math.round(local * sampleRate)));
     return [
-      { ...c, samples: c.samples.slice(0, cut) },
+      { ...c, from, to: from + cut },
       {
         ...c,
         id: makeId ? makeId() : c.id + ':b',
         start: c.start + cut / sampleRate,
-        samples: c.samples.slice(cut),
+        from: from + cut,
+        to,
       },
     ];
   }
 
+  // Move one edge to an absolute time. The take stays intact, so an edge can
+  // be dragged back out to the original recorded bounds — never destructive.
   function trimClip(c, edge, atAbs, sampleRate, minLen = MIN_LEN) {
-    const dur = clipDur(c, sampleRate);
-    const end = c.start + dur;
-    if (edge === 'l') {
-      const at = Math.max(c.start, Math.min(atAbs, end - minLen));
-      const remove = Math.max(0, Math.min(c.samples.length - 1, Math.round((at - c.start) * sampleRate)));
-      return { ...c, start: c.start + remove / sampleRate, samples: c.samples.slice(remove) };
+    const left = edge === 'l' || edge === 'left';
+    const minSamples = Math.max(1, Math.round(minLen * sampleRate));
+    const from = clipFrom(c);
+    const to = clipTo(c);
+    const idx = from + Math.round((atAbs - c.start) * sampleRate);
+    if (left) {
+      const next = Math.max(0, Math.min(idx, to - minSamples));
+      if (next === from) return c;
+      return { ...c, start: c.start + (next - from) / sampleRate, from: next, to };
     }
-    const at = Math.max(c.start + minLen, Math.min(atAbs, end));
-    const keep = Math.max(1, Math.min(c.samples.length, Math.round((at - c.start) * sampleRate)));
-    return { ...c, samples: c.samples.slice(0, keep) };
+    const next = Math.max(from + minSamples, Math.min(idx, c.samples.length));
+    if (next === to) return c;
+    return { ...c, from, to: next };
   }
 
   function moveClip(c, start, minStart = 0) {
@@ -60,25 +81,37 @@
     const cStart = c.start;
     const cEnd = clipEnd(c, sampleRate);
     if (end <= cStart + EPS || start >= cEnd - EPS) return [c];
+    const from = clipFrom(c);
+    const to = clipTo(c);
     const out = [];
     const cutL = Math.max(0, Math.round((Math.min(start, cEnd) - cStart) * sampleRate));
     const cutR = Math.max(0, Math.round((Math.max(end, cStart) - cStart) * sampleRate));
-    if (cutL > 0) out.push({ ...c, samples: c.samples.slice(0, cutL) });
-    if (cutR < c.samples.length) {
+    if (cutL > 0) out.push({ ...c, from, to: from + Math.min(cutL, to - from) });
+    if (from + cutR < to) {
       out.push({
         ...c,
         id: makeId ? makeId() : c.id + ':r',
         start: c.start + cutR / sampleRate,
-        samples: c.samples.slice(cutR),
+        from: from + cutR,
+        to,
       });
     }
     return out;
   }
 
   // Punch-in: clear the recorded span on one track, preserving pieces outside it.
+  // Surviving pieces get their own sample buffer, so the overwritten audio cannot
+  // be trimmed back in later.
   function punchTrack(clips, start, end, sampleRate, makeId) {
     const out = [];
-    for (const c of clips) out.push(...removeRangeFromClip(c, start, end, sampleRate, makeId));
+    for (const c of clips) {
+      for (const piece of removeRangeFromClip(c, start, end, sampleRate, makeId)) {
+        if (piece === c) { out.push(c); continue; }
+        const from = clipFrom(piece);
+        const to = clipTo(piece);
+        out.push({ ...piece, samples: piece.samples.slice(from, to), from: 0, to: to - from });
+      }
+    }
     return out.sort((a, b) => a.start - b.start);
   }
 
@@ -86,11 +119,12 @@
     const total = Math.ceil(takesEnd(clips, sampleRate) * sampleRate - EPS);
     const out = new Float32Array(Math.max(0, total));
     for (const c of clips) {
+      const data = clipSamples(c);
       const off = Math.max(0, Math.round(c.start * sampleRate));
-      for (let i = 0; i < c.samples.length; i++) {
+      for (let i = 0; i < data.length; i++) {
         const j = off + i;
         if (j >= out.length) break;
-        const v = out[j] + c.samples[i];
+        const v = out[j] + data[i];
         out[j] = v > 1 ? 1 : (v < -1 ? -1 : v);
       }
     }
@@ -112,7 +146,7 @@
     const set = new Set([0]);
     for (const c of clips) {
       set.add(q(c.start));
-      set.add(q(c.start + c.samples.length / sampleRate));
+      set.add(q(c.start + clipDur(c, sampleRate)));
     }
     return [...set].sort((a, b) => a - b);
   }
@@ -129,6 +163,9 @@
 
   return {
     MIN_LEN,
+    clipFrom,
+    clipTo,
+    clipSamples,
     clipDur,
     clipEnd,
     takesEnd,

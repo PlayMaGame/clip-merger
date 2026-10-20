@@ -1,7 +1,7 @@
 /* ---------------- mic recorder: compact audio-only timeline ----------------
-   A small clone of the main timeline: ruler, two audio lanes (MAIN/ALT),
-   playhead, drag/trim/split/delete, zoom, fit, snap, undo/redo and hotkeys.
-   Save mixes both lanes into one WAV. */
+   A small clone of the main timeline: ruler, one audio lane (MAIN), playhead,
+   drag/trim/split/delete, zoom, fit, snap, undo/redo, a jog/shuttle bar and the
+   main timeline's shortcuts. Save mixes the lane into one WAV. */
 (function () {
   'use strict';
 
@@ -13,17 +13,18 @@
   const EDGE_PX = 6;       // trim hit zone
   const SNAP_PX = 8;
   const MAX_HISTORY = 80;
+  const MAX_WAVE_GAIN = 8; // quiet takes are amplified visually up to 8x
   const TICK_STEPS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
 
   const mic = {
     ctx: null, stream: null, source: null, processor: null, sink: null,
     sampleRate: 48000,
-    tracks: { main: [], alt: [] },
+    tracks: { main: [] },
     activeTrack: 'main',
     selectedIds: new Set(),
     playhead: 0,
     recording: false,
-    recChunks: [], recLen: 0, recStart: 0, recTrack: 'main', recUndo: null,
+    recChunks: [], recLen: 0, recStart: 0, recTrack: 'main', recUndo: null, recPeak: 0,
     playing: false, playNodes: [], playStartCtx: 0, playStartPos: 0, playEnd: 0,
     pps: 90, offset: 0,
     snap: true,
@@ -34,36 +35,33 @@
     wired: false,
   };
   let micIdCounter = 0;
+  let micLastDown = { key: null, t: 0 };
+  const micScaleCache = new WeakMap();
 
   const mq = (sel) => document.querySelector(sel);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const MIC_MIN_LEN = MM.MIN_LEN;
 
   function micNewId() { micIdCounter += 1; return 'm' + micIdCounter; }
-  function micClips() { return [...mic.tracks.main, ...mic.tracks.alt]; }
+  function micClips() { return [...mic.tracks.main]; }
   function micEnd() { return MM.takesEnd(micClips(), mic.sampleRate); }
   function micContentEnd() {
     return Math.max(micEnd(), mic.recording ? mic.recStart + mic.recLen / mic.sampleRate : 0);
   }
   function micFind(id) {
-    for (const track of ['main', 'alt']) {
-      const clip = mic.tracks[track].find((c) => c.id === id);
-      if (clip) return { clip, track };
-    }
-    return null;
+    const clip = mic.tracks.main.find((c) => c.id === id);
+    return clip ? { clip, track: 'main' } : null;
   }
   function micReplace(clip) {
-    const arr = mic.tracks[clip.track];
+    const arr = mic.tracks[clip.track] || mic.tracks.main;
     const i = arr.findIndex((c) => c.id === clip.id);
     if (i >= 0) arr[i] = clip;
   }
   function micRemove(id) {
     mic.tracks.main = mic.tracks.main.filter((c) => c.id !== id);
-    mic.tracks.alt = mic.tracks.alt.filter((c) => c.id !== id);
   }
   function micSort() {
     mic.tracks.main.sort((a, b) => a.start - b.start);
-    mic.tracks.alt.sort((a, b) => a.start - b.start);
   }
   function micMarkDirty() { mic.saved = false; }
   function micClipAt(track, t) {
@@ -83,7 +81,7 @@
   /* ---- history ---- */
   function micSnapshot() {
     return {
-      tracks: { main: mic.tracks.main.slice(), alt: mic.tracks.alt.slice() },
+      tracks: { main: mic.tracks.main.slice() },
       selected: [...mic.selectedIds],
       activeTrack: mic.activeTrack,
       playhead: mic.playhead,
@@ -91,7 +89,7 @@
   }
   function micRestore(s) {
     if (!s) return;
-    mic.tracks = { main: s.tracks.main.slice(), alt: s.tracks.alt.slice() };
+    mic.tracks = { main: s.tracks.main.slice() };
     mic.selectedIds = new Set(s.selected || []);
     mic.activeTrack = s.activeTrack || 'main';
     mic.playhead = Math.max(0, s.playhead || 0);
@@ -131,7 +129,7 @@
   }
 
   function micReset() {
-    mic.tracks = { main: [], alt: [] };
+    mic.tracks = { main: [] };
     mic.activeTrack = 'main';
     mic.selectedIds = new Set();
     mic.playhead = 0;
@@ -141,6 +139,7 @@
     mic.recStart = 0;
     mic.recTrack = 'main';
     mic.recUndo = null;
+    mic.recPeak = 0;
     mic.playing = false;
     mic.playNodes = [];
     mic.pps = 90;
@@ -176,6 +175,10 @@
       chunk.set(input);
       mic.recChunks.push(chunk);
       mic.recLen += chunk.length;
+      for (let i = 0; i < chunk.length; i++) {
+        const v = Math.abs(chunk[i]);
+        if (v > mic.recPeak) mic.recPeak = v;
+      }
       mic.playhead = mic.recStart + mic.recLen / mic.sampleRate;
     };
     mic.sink = ctx.createGain();
@@ -204,6 +207,7 @@
     mic.recTrack = mic.activeTrack;
     mic.recChunks = [];
     mic.recLen = 0;
+    mic.recPeak = 0;
     mic.recUndo = micSnapshot();
     try { await micStartCapture(); }
     catch (e) {
@@ -250,10 +254,11 @@
     mic.saved = false;
     mic.recChunks = [];
     mic.recLen = 0;
+    mic.recPeak = 0;
     mic.recUndo = null;
     micUpdateUI();
     micDraw();
-    setStatus(`Recorded ${(samples.length / sr).toFixed(2)}s on ${track.toUpperCase()}`);
+    setStatus(`Recorded ${(samples.length / sr).toFixed(2)}s`);
   }
 
   /* ---- playback ---- */
@@ -349,10 +354,12 @@
     const r = mini.getBoundingClientRect();
     return Math.max(0, mic.offset + (clientX - r.left - GUTTER) / mic.pps);
   }
-  function micClampOffset() {
+  function micOffsetMax() {
     const end = Math.max(micContentEnd(), mic.playhead, 0);
-    const maxOff = Math.max(0, end + 0.4 - micViewDur());
-    mic.offset = clamp(mic.offset, 0, maxOff);
+    return Math.max(0, end + 0.4 - micViewDur());
+  }
+  function micClampOffset() {
+    mic.offset = clamp(mic.offset, 0, micOffsetMax());
   }
   function micEnsureVisible(t) {
     const w = micMiniWidth();
@@ -441,17 +448,40 @@
   }
 
   function micClipPeak(clip, t0, t1) {
+    const data = MM.clipSamples(clip);
     const sr = mic.sampleRate;
     const a = Math.max(0, Math.floor((t0 - clip.start) * sr));
-    const b = Math.min(clip.samples.length, Math.ceil((t1 - clip.start) * sr));
+    const b = Math.min(data.length, Math.ceil((t1 - clip.start) * sr));
     if (b <= a) return 0;
     const step = Math.max(1, Math.floor((b - a) / 12));
     let peak = 0;
     for (let i = a; i < b; i += step) {
-      const v = Math.abs(clip.samples[i]);
+      const v = Math.abs(data[i]);
       if (v > peak) peak = v;
     }
     return peak;
+  }
+
+  // Amplify quiet takes visually so their waveform fills the lane. The gain is
+  // per source take (cached on the sample array), so split halves match exactly.
+  function micClipGain(clip) {
+    const data = clip.samples;
+    let gain = micScaleCache.get(data);
+    if (gain == null) {
+      let peak = 0;
+      const step = Math.max(1, Math.floor(data.length / 4000));
+      for (let i = 0; i < data.length; i += step) {
+        const v = Math.abs(data[i]);
+        if (v > peak) peak = v;
+      }
+      gain = Math.min(MAX_WAVE_GAIN, 1 / Math.max(peak, 0.08));
+      micScaleCache.set(data, gain);
+    }
+    return gain;
+  }
+
+  function micRecGain() {
+    return Math.min(MAX_WAVE_GAIN, 1 / Math.max(mic.recPeak, 0.08));
   }
 
   function micRecPeak(t0, t1) {
@@ -477,14 +507,14 @@
     return peak;
   }
 
-  function micDrawWave(g, left, right, top, bottom, peakAt) {
+  function micDrawWave(g, left, right, top, bottom, peakAt, gain) {
     const mid = (top + bottom) / 2;
     const amp = Math.max(1, (bottom - top) / 2 - 4);
     const buckets = Math.max(1, Math.floor(right - left));
     g.beginPath();
     for (let i = 0; i < buckets; i++) {
       const peak = peakAt(i, buckets);
-      const half = Math.max(0.7, peak * amp);
+      const half = Math.max(0.7, Math.min(amp, peak * amp * gain));
       const x = left + i + 0.5;
       g.moveTo(x, mid - half);
       g.lineTo(x, mid + half);
@@ -516,11 +546,12 @@
     g.clip();
     g.strokeStyle = 'rgba(200,248,255,.9)';
     g.lineWidth = 1;
+    const gain = micClipGain(clip);
     micDrawWave(g, left, right, top + 2, bottom - 2, (i, n) => {
       const t0 = clip.start + (i / n) * dur;
       const t1 = clip.start + ((i + 1) / n) * dur;
       return micClipPeak(clip, t0, t1);
-    });
+    }, gain);
     g.restore();
     g.fillStyle = 'rgba(255,255,255,.65)';
     g.fillRect(left, top, 2, height);
@@ -563,14 +594,14 @@
       const t0 = mic.recStart + (i / n) * dur;
       const t1 = mic.recStart + ((i + 1) / n) * dur;
       return micRecPeak(t0, t1);
-    });
+    }, micRecGain());
     g.restore();
     g.fillStyle = 'rgba(255,255,255,.7)';
     g.fillRect(left, top, 2, height);
   }
 
-  function micDrawLane(track) {
-    const canvas = mq(track === 'alt' ? '#mic-wave-alt' : '#mic-wave-main');
+  function micDrawLane() {
+    const canvas = mq('#mic-wave-main');
     const setup = micCanvasSize(canvas);
     if (!setup) return;
     const { g, w, h } = setup;
@@ -588,17 +619,17 @@
     }
     g.strokeStyle = 'rgba(255,255,255,.08)';
     g.beginPath(); g.moveTo(GUTTER, h / 2); g.lineTo(w, h / 2); g.stroke();
-    for (const clip of mic.tracks[track]) micDrawClip(g, w, h, clip, mic.selectedIds.has(clip.id));
-    if (mic.recording && mic.recTrack === track) micDrawRecording(g, w, h);
-    if (!mic.tracks[track].length && !(mic.recording && mic.recTrack === track)) {
+    for (const clip of mic.tracks.main) micDrawClip(g, w, h, clip, mic.selectedIds.has(clip.id));
+    if (mic.recording) micDrawRecording(g, w, h);
+    if (!mic.tracks.main.length && !mic.recording) {
       g.fillStyle = 'rgba(255,255,255,.22)';
       g.font = '11px sans-serif';
       g.textAlign = 'left';
       g.textBaseline = 'middle';
-      g.fillText(track === 'main' ? 'Record or drag a take here' : 'ALT track', GUTTER + 10, h / 2);
+      g.fillText('Record or drag a take here', GUTTER + 10, h / 2);
     }
     const d = mic.drag;
-    if (d && d.type === 'marquee' && d.track === track) {
+    if (d && d.type === 'marquee') {
       const a = Math.min(d.startT, d.currentT);
       const b = Math.max(d.startT, d.currentT);
       const xa = micXAt(a);
@@ -614,8 +645,7 @@
     if (!mq('#mic-mini')) return;
     micClampOffset();
     micDrawRuler();
-    micDrawLane('main');
-    micDrawLane('alt');
+    micDrawLane();
     const ph = mq('#mic-playhead');
     if (ph) {
       const x = micXAt(mic.playhead);
@@ -675,7 +705,66 @@
   /* ---- pointer interaction ---- */
   function micLaneAt(e) { return e.target.closest('.mic-lane'); }
 
+  // Double-click detection on pointerdown: the pointerdown handlers prevent
+  // default, which suppresses the native dblclick.
+  function micIsDoubleDown(key) {
+    const now = performance.now();
+    const hit = micLastDown.key === key && (now - micLastDown.t) < 320;
+    micLastDown = { key, t: now };
+    return hit;
+  }
+
+  // First empty span at or after 0 that contains t.
+  function micGapAt(t) {
+    const clips = [...mic.tracks.main].sort((a, b) => a.start - b.start);
+    let prevEnd = 0;
+    for (const c of clips) {
+      if (c.start > prevEnd + 1e-6 && t >= prevEnd - 1e-6 && t <= c.start + 1e-6) {
+        return { start: prevEnd, end: c.start };
+      }
+      prevEnd = Math.max(prevEnd, MM.clipEnd(c, mic.sampleRate));
+    }
+    return null;
+  }
+
+  function micDeleteClip(clip) {
+    const before = micSnapshot();
+    micRemove(clip.id);
+    micPushHistory(before);
+    mic.selectedIds.delete(clip.id);
+    mic.saved = false;
+    micUpdateUI();
+    micDraw();
+    setStatus('Deleted take');
+  }
+
+  // Double-clicking a gap ripples everything after it left, closing the span.
+  function micCloseGap(gap) {
+    const w = gap.end - gap.start;
+    if (w <= 1e-6) return;
+    const before = micSnapshot();
+    for (const c of mic.tracks.main) {
+      if (c.start >= gap.end - 1e-6) c.start = Math.max(0, c.start - w);
+    }
+    micSort();
+    micPushHistory(before);
+    if (mic.playhead >= gap.end - 1e-6) mic.playhead = Math.max(0, mic.playhead - w);
+    mic.saved = false;
+    micUpdateUI();
+    micDraw();
+    setStatus(`Closed ${w.toFixed(2)}s gap`);
+  }
+
   function micPointerDown(e) {
+    if (e.button === 1) {
+      micStopPlay();
+      mic.drag = { type: 'pan', lastX: e.clientX };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+      const mini = mq('#mic-mini');
+      if (mini) { mini.classList.add('panning'); mini.style.cursor = 'grabbing'; }
+      e.preventDefault();
+      return;
+    }
     if (e.button !== 0) return;
     const lane = micLaneAt(e);
     if (!lane) return;
@@ -685,6 +774,18 @@
     const clip = micClipAt(track, t);
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     e.preventDefault();
+
+    const gap = clip ? null : micGapAt(t);
+    const dblKey = clip ? 'c' + clip.id : (gap ? `g${gap.start}:${gap.end}` : null);
+    if (dblKey && micIsDoubleDown(dblKey)) {
+      micLastDown = { key: null, t: 0 };
+      mic.drag = null;
+      if (clip) micDeleteClip(clip);
+      else micCloseGap(gap);
+      return;
+    }
+    if (!dblKey) micLastDown = { key: null, t: 0 };
+
     if (!clip) {
       mic.activeTrack = track;
       if (!e.ctrlKey && !e.metaKey) mic.selectedIds.clear();
@@ -732,6 +833,25 @@
     const d = mic.drag;
     if (!d) return;
     const t = micTimeAtX(e.clientX);
+    if (d.type === 'pan') {
+      const dx = e.clientX - d.lastX;
+      if (dx) {
+        d.lastX = e.clientX;
+        mic.offset = clamp(mic.offset - dx / mic.pps, 0, micOffsetMax());
+        micUpdateUI();
+        micDraw();
+      }
+      return;
+    }
+    if (d.type === 'scrub') {
+      // Slide the timeline under the pinned playhead, like the main jog bar.
+      const raw = d.startOffset - (e.clientX - d.startX) / mic.pps;
+      mic.offset = clamp(raw, 0, micOffsetMax());
+      mic.playhead = clamp(d.pinTime + raw, 0, Math.max(micEnd(), 0));
+      micUpdateUI();
+      micDraw();
+      return;
+    }
     if (d.type === 'marquee') {
       d.currentT = t;
       if (Math.abs(t - d.startT) * mic.pps > 3) d.moved = true;
@@ -765,10 +885,12 @@
       let at = t;
       if (mic.snap) at = MM.snapTime(at, micSnapPoints(d.id), SNAP_PX / mic.pps);
       const edge = d.type === 'trim-l' ? 'left' : 'right';
+      // trimClip moves the sample window, so the edge can be dragged back out.
       micReplace(MM.trimClip(found.clip, edge, at, mic.sampleRate, MIC_MIN_LEN));
       d.moved = true;
       micSort();
     }
+    if (d.moved) micLastDown = { key: null, t: 0 };
     micMarkDirty();
     micUpdateUI();
     micDraw();
@@ -778,6 +900,10 @@
     const d = mic.drag;
     if (!d) return;
     mic.drag = null;
+    const mini = mq('#mic-mini');
+    if (mini) { mini.classList.remove('panning'); mini.style.cursor = ''; }
+    const scrubEl = mq('#mic-scrub');
+    if (scrubEl) scrubEl.classList.remove('dragging');
     if (d.type === 'marquee') {
       if (d.moved) {
         const a = Math.min(d.startT, d.currentT);
@@ -819,24 +945,17 @@
     if (!modal || modal.classList.contains('hidden')) return;
     const mini = mq('#mic-mini');
     if (!mini) return;
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      const r = mini.getBoundingClientRect();
-      const px = clamp(e.clientX - r.left, GUTTER, mini.clientWidth);
-      const anchor = mic.offset + (px - GUTTER) / mic.pps;
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      mic.pps = clamp(mic.pps * factor, 10, 3000);
-      mic.offset = Math.max(0, anchor - (px - GUTTER) / mic.pps);
-      micClampOffset();
-      micUpdateUI();
-      micDraw();
-    } else if (e.shiftKey) {
-      e.preventDefault();
-      mic.offset = Math.max(0, mic.offset + (e.deltaY || e.deltaX) / mic.pps);
-      micClampOffset();
-      micUpdateUI();
-      micDraw();
-    }
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const r = mini.getBoundingClientRect();
+    const px = clamp(e.clientX - r.left, GUTTER, mini.clientWidth);
+    const anchor = mic.offset + (px - GUTTER) / mic.pps;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    mic.pps = clamp(mic.pps * factor, 10, 3000);
+    mic.offset = Math.max(0, anchor - (px - GUTTER) / mic.pps);
+    micClampOffset();
+    micUpdateUI();
+    micDraw();
   }
 
   /* ---- edit commands ---- */
@@ -887,6 +1006,14 @@
     micStopPlay();
     const target = MM.nextCut(MM.cutPoints(micClips(), mic.sampleRate), mic.playhead, dir);
     mic.playhead = target == null ? (dir < 0 ? 0 : micEnd()) : target;
+    micEnsureVisible(mic.playhead);
+    micUpdateUI();
+    micDraw();
+  }
+
+  function micSeek(t) {
+    micStopPlay();
+    mic.playhead = clamp(t, 0, Math.max(micEnd(), 0));
     micEnsureVisible(mic.playhead);
     micUpdateUI();
     micDraw();
@@ -977,9 +1104,16 @@
     } else if (mod && (e.key === 'y' || e.key === 'Y')) {
       micRedo();
     } else if (e.key === ' ') {
-      micTogglePlay();
-    } else if (e.key === 's' || e.key === 'S') {
-      micSplit();
+      if (!e.repeat) {
+        // A focused button would otherwise swallow Space; play/pause wins.
+        const ae = document.activeElement;
+        if (ae && ae !== document.body && typeof ae.blur === 'function') ae.blur();
+        micTogglePlay();
+      }
+    } else if (!mod && (e.key === 'r' || e.key === 'R')) {
+      if (!e.repeat) micToggleRecord();
+    } else if (!mod && (e.key === 's' || e.key === 'S')) {
+      if (!e.repeat) micSplit();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       micDelete();
     } else if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') {
@@ -1036,6 +1170,34 @@
         e.preventDefault();
       });
     }
+    // Jog / shuttle bar: same controls as the main timeline's scrub bar.
+    on('#mic-scrub-start', 'click', () => micSeek(0));
+    on('#mic-scrub-end', 'click', () => micSeek(micEnd()));
+    on('#mic-scrub-prev', 'click', () => micJumpCut(-1));
+    on('#mic-scrub-next', 'click', () => micJumpCut(1));
+    const scrub = mq('#mic-scrub');
+    if (scrub) {
+      scrub.querySelectorAll('.scrub-nav button').forEach((b) => {
+        b.addEventListener('pointerdown', (e) => e.stopPropagation());
+      });
+      scrub.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        micStopPlay();
+        mic.drag = {
+          type: 'scrub',
+          startX: e.clientX,
+          startOffset: mic.offset,
+          pinTime: mic.playhead - mic.offset,
+        };
+        try { scrub.setPointerCapture(e.pointerId); } catch (_) {}
+        scrub.classList.add('dragging');
+        e.preventDefault();
+      });
+      scrub.addEventListener('pointermove', micPointerMove);
+      scrub.addEventListener('pointerup', micPointerUp);
+      scrub.addEventListener('pointercancel', micPointerUp);
+      scrub.addEventListener('lostpointercapture', () => scrub.classList.remove('dragging'));
+    }
     document.addEventListener('keydown', micKeyDown);
   }
 
@@ -1045,14 +1207,29 @@
   window.wireMicEvents = wireMicEvents;
   window.micDebugState = () => ({
     main: mic.tracks.main.length,
-    alt: mic.tracks.alt.length,
+    alt: 0,
     selected: [...mic.selectedIds],
     playhead: mic.playhead,
     recording: mic.recording,
+    playing: mic.playing,
     recLen: mic.recLen,
+    recPeak: mic.recPeak,
     pps: mic.pps,
     offset: mic.offset,
     saved: mic.saved,
     activeTrack: mic.activeTrack,
+    drag: mic.drag ? {
+      type: mic.drag.type,
+      id: mic.drag.id,
+      startT: mic.drag.startT,
+      moved: mic.drag.moved,
+    } : null,
+    clips: mic.tracks.main.map((c) => ({
+      start: c.start,
+      dur: MM.clipDur(c, mic.sampleRate),
+      from: MM.clipFrom(c),
+      to: MM.clipTo(c),
+      len: c.samples.length,
+    })),
   });
 })();

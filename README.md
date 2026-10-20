@@ -28,11 +28,12 @@ already matches the export size/FPS).
   **beat markers** auto-detected from a sound's transients so you can snap clips to
   music beats, explosions, shots, etc.
 - **Mic recorder**: the red **Mic** button (Sounds bin header) opens a compact audio
-  timeline with a ruler, MAIN/ALT lanes, zoom/Fit, snap, split/delete, undo/redo and
-  the main editor's shortcuts (Space, S, Del, Ctrl+Z/Y, A/D, F, Ctrl+wheel). Record
-  punches into the active track at the playhead; drag takes to move, drag edges to trim.
-  Save mixes both tracks into one 48 kHz mono WAV under Sounds → **Mic Record**; takes
-  are not auto-added.
+  timeline with a ruler, lane, zoom/Fit, snap, split/delete, undo/redo, a jog/shuttle
+  bar (start / prev cut / next cut / end) and the main editor's shortcuts (Space, R,
+  S, Del, Ctrl+Z/Y, A/D, F, Ctrl+wheel, middle-drag pan). Record punches in at the
+  playhead; drag takes to move, drag edges to trim (both directions), and double-click
+  a take to delete it or a gap to close it. Save writes one 48 kHz mono WAV under
+  Sounds → **Mic Record**; takes are not auto-added.
 - **Favorites**: right-click any bin item (including effects) to rate it 1–5 stars, clear
   the rating, or reveal it in Explorer. Favorites sort above unstarred items and persist
   per path in the app's user data folder.
@@ -81,9 +82,10 @@ npm start
 5. **◆ Marker** to add markers; select a sound and **♫ Detect beats** to wing beats onto
    the timeline, then snap clips onto them.
 6. Click **Mic** in the Sounds bin header to record. Use the mini timeline like the
-   main one — Space play, S split, Del delete, Ctrl+Z/Y undo/redo, A/D jump, F fit,
-   Ctrl+wheel zoom. Save mixes MAIN/ALT to Sounds → **Mic Record**; drag the WAV onto
-   the timeline.
+   main one — Space play, R record, S split, Del (or double-click a take) delete,
+   Ctrl+Z/Y undo/redo, A/D jump, F fit, Ctrl+wheel zoom, middle-drag pan, and the jog
+   bar to shuttle. Double-click a gap to close it. Save writes the take to
+   Sounds → **Mic Record**; drag the WAV onto the timeline.
 7. Put the playhead over a video clip and click **Freeze** in the Effects bin to hold a
    frame for 3 seconds and ripple the edit. Images dropped on MAIN/ALT start at 3 seconds
    and can be trimmed longer.
