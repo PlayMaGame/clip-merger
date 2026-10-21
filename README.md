@@ -181,5 +181,9 @@ merge.bat             your older one-shot batch merge script (kept, not used by 
 
 ## Changelog
 
-Current version: **0.8.1**. See [CHANGELOG.md](CHANGELOG.md) for the full version
+Current version: **0.9.4**. See [CHANGELOG.md](CHANGELOG.md) for the full version
 history (every release, newest first).
+
+## License
+
+[MIT](LICENSE) © 2026 PlayMaGame
